@@ -11,6 +11,9 @@ struct ContentView: View {
     @State private var progress = ImportProgress()
     @State private var volumeWatcher = VolumeWatcher()
     @State private var importTask: Task<Void, Never>?
+    @State private var previewTask: Task<Void, Never>?
+    @State private var previewResult: PreviewResult?
+    @State private var isPreviewing = false
     @State private var showingSummary = false
     @State private var showingSettings = false
 
@@ -18,6 +21,9 @@ struct ContentView: View {
         VStack(spacing: 16) {
             pathSection
             modeSection
+            if isPreviewing || previewResult != nil {
+                previewSection
+            }
             actionSection
             if progress.isScanning || progress.isImporting {
                 progressSection
@@ -41,6 +47,8 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: sourcePath) { _, _ in runPreview() }
+        .onChange(of: destinationPath) { _, _ in runPreview() }
         .onChange(of: volumeWatcher.lastMountedVolumePath) { _, newPath in
             if let newPath {
                 sourcePath = newPath
@@ -55,6 +63,7 @@ struct ContentView: View {
         .onDisappear {
             volumeWatcher.stopWatching()
             importTask?.cancel()
+            previewTask?.cancel()
         }
     }
 
@@ -120,10 +129,42 @@ struct ContentView: View {
                 Button("Start Import") {
                     startImport()
                 }
-                .disabled(sourcePath.isEmpty || destinationPath.isEmpty)
+                .disabled(sourcePath.isEmpty || destinationPath.isEmpty || isPreviewing)
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
+    }
+
+    private var previewSection: some View {
+        HStack(spacing: 12) {
+            if isPreviewing {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Scanning...")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") {
+                    previewTask?.cancel()
+                    previewTask = nil
+                    isPreviewing = false
+                    previewResult = nil
+                }
+                .controlSize(.small)
+            } else if let preview = previewResult {
+                Label("\(preview.totalFiles) files found", systemImage: "photo.on.rectangle")
+                Spacer()
+                Text("\(preview.newFileCount) new")
+                    .foregroundStyle(.green)
+                if preview.duplicateCount > 0 {
+                    Text("\(preview.duplicateCount) duplicates")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.callout)
+        .padding(10)
+        .background(.quaternary.opacity(0.5))
+        .cornerRadius(8)
     }
 
     private var progressSection: some View {
@@ -247,13 +288,46 @@ struct ContentView: View {
         }
     }
 
+    private func runPreview() {
+        previewTask?.cancel()
+        previewResult = nil
+
+        guard !sourcePath.isEmpty, !destinationPath.isEmpty else { return }
+        guard !progress.isImporting, !progress.isComplete else { return }
+
+        isPreviewing = true
+        let src = URL(fileURLWithPath: sourcePath)
+        let dst = URL(fileURLWithPath: destinationPath)
+
+        previewTask = Task {
+            let engine = ImportEngine()
+            let checker = DuplicateChecker()
+
+            do {
+                try await checker.buildIndex(at: dst)
+                let result = try await engine.previewImport(source: src, duplicateChecker: checker)
+                if !Task.isCancelled {
+                    previewResult = result
+                }
+            } catch {
+                // Preview is best-effort; silently ignore errors
+            }
+
+            isPreviewing = false
+        }
+    }
+
     private func startImport() {
         progress.reset()
-        progress.isScanning = true
 
         let src = URL(fileURLWithPath: sourcePath)
         let dst = URL(fileURLWithPath: destinationPath)
         let mode = TransferMode(rawValue: transferMode) ?? .copy
+        let cachedPreview = previewResult
+
+        previewTask?.cancel()
+        previewResult = nil
+        isPreviewing = false
 
         importTask = Task {
             let engine = ImportEngine()
@@ -261,11 +335,22 @@ struct ContentView: View {
 
             do {
                 try await checker.buildIndex(at: dst)
-                let files = try await engine.discoverFiles(in: src)
+
+                let files: [URL]
+                let preview: PreviewResult?
+
+                if let cachedPreview {
+                    files = cachedPreview.files
+                    preview = cachedPreview
+                } else {
+                    progress.isScanning = true
+                    files = try await engine.discoverFiles(in: src)
+                    progress.isScanning = false
+                    preview = nil
+                }
 
                 await MainActor.run {
                     progress.totalFiles = files.count
-                    progress.isScanning = false
                     progress.isImporting = true
                 }
 
@@ -274,7 +359,8 @@ struct ContentView: View {
                     destination: dst,
                     mode: mode,
                     duplicateChecker: checker,
-                    progress: progress
+                    progress: progress,
+                    previewResult: preview
                 )
             } catch {
                 if !Task.isCancelled {

@@ -1,6 +1,14 @@
 import Foundation
 import AVFoundation
 
+struct PreviewResult: Sendable {
+    let files: [URL]
+    let duplicateIndices: Set<Int>
+    var totalFiles: Int { files.count }
+    var duplicateCount: Int { duplicateIndices.count }
+    var newFileCount: Int { totalFiles - duplicateCount }
+}
+
 actor ImportEngine {
     private static let supportedExtensions: Set<String> = [
         "jpg", "jpeg", "heic", "heif",
@@ -34,12 +42,34 @@ actor ImportEngine {
         return files
     }
 
+    func previewImport(
+        source: URL,
+        duplicateChecker: DuplicateChecker
+    ) async throws -> PreviewResult {
+        let files = try discoverFiles(in: source)
+        let fm = FileManager.default
+        var duplicateIndices: Set<Int> = []
+
+        for (index, fileURL) in files.enumerated() {
+            if Task.isCancelled { break }
+            let filename = fileURL.lastPathComponent
+            guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
+                  let fileSize = attrs[.size] as? Int else { continue }
+            if await duplicateChecker.isDuplicate(filename: filename, size: fileSize) {
+                duplicateIndices.insert(index)
+            }
+        }
+
+        return PreviewResult(files: files, duplicateIndices: duplicateIndices)
+    }
+
     func importFiles(
         files: [URL],
         destination: URL,
         mode: TransferMode,
         duplicateChecker: DuplicateChecker,
-        progress: ImportProgress
+        progress: ImportProgress,
+        previewResult: PreviewResult? = nil
     ) async throws {
         let fm = FileManager.default
         let maxConcurrency = 6
@@ -47,8 +77,16 @@ actor ImportEngine {
         await withThrowingTaskGroup(of: Void.self) { group in
             var running = 0
 
-            for fileURL in files {
+            for (index, fileURL) in files.enumerated() {
                 if Task.isCancelled { break }
+
+                if let preview = previewResult, preview.duplicateIndices.contains(index) {
+                    await MainActor.run {
+                        progress.duplicatesSkipped += 1
+                        progress.processedFiles += 1
+                    }
+                    continue
+                }
 
                 if running >= maxConcurrency {
                     _ = try? await group.next()
@@ -62,7 +100,8 @@ actor ImportEngine {
                         mode: mode,
                         duplicateChecker: duplicateChecker,
                         progress: progress,
-                        fileManager: fm
+                        fileManager: fm,
+                        skipDuplicateCheck: previewResult != nil
                     )
                 }
                 running += 1
@@ -76,7 +115,8 @@ actor ImportEngine {
         mode: TransferMode,
         duplicateChecker: DuplicateChecker,
         progress: ImportProgress,
-        fileManager fm: FileManager
+        fileManager fm: FileManager,
+        skipDuplicateCheck: Bool = false
     ) async throws {
         let filename = fileURL.lastPathComponent
 
@@ -91,7 +131,7 @@ actor ImportEngine {
             return
         }
 
-        if await duplicateChecker.isDuplicate(filename: filename, size: fileSize) {
+        if !skipDuplicateCheck, await duplicateChecker.isDuplicate(filename: filename, size: fileSize) {
             await MainActor.run {
                 progress.duplicatesSkipped += 1
                 progress.processedFiles += 1
