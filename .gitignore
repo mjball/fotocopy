@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+Foto.app/
+Foto.app.zip
