@@ -6,16 +6,21 @@ A small macOS app for importing photos and videos from SD cards and external dri
 
 - Imports JPG, HEIC, RAW (CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2), and video (MOV/MP4/M4V)
 - Organizes files into `YYYY/YYYY-MM-DD/` folders by EXIF date
-- Skips duplicates using SHA-256 checksums
+- Preview scan shows new vs duplicate files before importing
+- Skips duplicates by filename + size matching
 - Copy or move mode
 - Optional auto-open when a named volume mounts
 - Eject source/destination on completion
 
 ## Install
 
-Download `Fotocopy.app.zip` from [Releases](https://github.com/mjball/fotocopy/releases), unzip, and move to `/Applications`.
+```
+curl -sL https://github.com/mjball/fotocopy/releases/latest/download/install.sh | bash
+```
 
-Since the app isn't signed with an Apple Developer ID, macOS will block it on first launch. To fix this, run:
+This downloads the latest release, clears macOS quarantine, and moves it to `/Applications`.
+
+Alternatively, download `Fotocopy.app.zip` from [Releases](https://github.com/mjball/fotocopy/releases), unzip, move to `/Applications`, and run:
 
 ```
 xattr -cr /Applications/Fotocopy.app

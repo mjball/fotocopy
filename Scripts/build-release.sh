@@ -55,7 +55,21 @@ echo "         Zip: $APP_ZIP"
 if [ -n "$VERSION" ]; then
     echo ""
     echo "Creating GitHub release $VERSION..."
-    gh release create "$VERSION" "$APP_ZIP" --title "$APP_NAME $VERSION" --notes "Release $VERSION"
+    INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
+    RELEASE_NOTES="$(cat <<NOTES
+## Install
+
+\`\`\`
+curl -sL https://github.com/mjball/fotocopy/releases/latest/download/install.sh | bash
+\`\`\`
+
+Or download \`$APP_NAME.app.zip\`, unzip, and run:
+\`\`\`
+xattr -cr /Applications/$APP_NAME.app
+\`\`\`
+NOTES
+)"
+    gh release create "$VERSION" "$APP_ZIP" "$INSTALL_SCRIPT" --title "$APP_NAME $VERSION" --notes "$RELEASE_NOTES"
     echo "Done! Release published at: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/$VERSION"
 else
     echo ""
