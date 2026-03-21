@@ -40,6 +40,9 @@ if [ -n "$VERSION_NUMBER" ]; then
     plutil -replace CFBundleVersion -string "$VERSION_NUMBER" "$BUNDLE_PLIST"
 fi
 
+echo "Ad-hoc code signing..."
+codesign --force --deep --sign - "$APP_BUNDLE"
+
 echo "Creating zip..."
 rm -f "$APP_ZIP"
 cd "$PROJECT_DIR"
