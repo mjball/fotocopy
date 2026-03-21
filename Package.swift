@@ -3,13 +3,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "Foto",
+    name: "Fotocopy",
     platforms: [
         .macOS(.v14)
     ],
     targets: [
         .executableTarget(
-            name: "Foto",
+            name: "Fotocopy",
             resources: [
                 .process("../../Resources")
             ]

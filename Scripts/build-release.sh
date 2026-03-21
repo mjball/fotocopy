@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-APP_NAME="Foto"
+APP_NAME="Fotocopy"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 APP_ZIP="$PROJECT_DIR/$APP_NAME.app.zip"
 

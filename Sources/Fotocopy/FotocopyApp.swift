@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct FotoApp: App {
+struct FotocopyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
