@@ -59,8 +59,10 @@ if [ -n "$VERSION" ]; then
     RELEASE_NOTES="$(cat <<NOTES
 ## Install
 
+Requires [GitHub CLI](https://cli.github.com/) (\`brew install gh\`).
+
 \`\`\`
-curl -sL https://github.com/mjball/fotocopy/releases/latest/download/install.sh | bash
+gh release download --repo mjball/fotocopy --pattern install.sh --dir /tmp && bash /tmp/install.sh && rm /tmp/install.sh
 \`\`\`
 
 Or download \`$APP_NAME.app.zip\`, unzip, and run:

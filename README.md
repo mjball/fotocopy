@@ -14,8 +14,10 @@ A small macOS app for importing photos and videos from SD cards and external dri
 
 ## Install
 
+Requires [GitHub CLI](https://cli.github.com/) (`brew install gh`).
+
 ```
-curl -sL https://github.com/mjball/fotocopy/releases/latest/download/install.sh | bash
+gh release download --repo mjball/fotocopy --pattern install.sh --dir /tmp && bash /tmp/install.sh && rm /tmp/install.sh
 ```
 
 This downloads the latest release, clears macOS quarantine, and moves it to `/Applications`.
