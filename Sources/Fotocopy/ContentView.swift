@@ -14,7 +14,6 @@ struct ContentView: View {
     @State private var previewTask: Task<Void, Never>?
     @State private var previewResult: PreviewResult?
     @State private var isPreviewing = false
-    @State private var showingSummary = false
     @State private var showingSettings = false
 
     var body: some View {
@@ -34,9 +33,6 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 480)
-        .sheet(isPresented: $showingSummary) {
-            SummaryView(progress: progress)
-        }
         .sheet(isPresented: $showingSettings) {
             settingsSheet
         }
@@ -216,9 +212,64 @@ struct ContentView: View {
     }
 
     private var completeSection: some View {
-        VStack(spacing: 12) {
-            Button("View Summary") {
-                showingSummary = true
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Import Complete")
+                .font(.headline)
+
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                GridRow {
+                    Text("Files imported:")
+                        .foregroundStyle(.secondary)
+                    Text("\(progress.processedFiles - progress.duplicatesSkipped - progress.errors.count)")
+                        .fontWeight(.medium)
+                }
+                GridRow {
+                    Text("Duplicates skipped:")
+                        .foregroundStyle(.secondary)
+                    Text("\(progress.duplicatesSkipped)")
+                        .fontWeight(.medium)
+                }
+                if !progress.errors.isEmpty {
+                    GridRow {
+                        Text("Errors:")
+                            .foregroundStyle(.secondary)
+                        Text("\(progress.errors.count)")
+                            .fontWeight(.medium)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .font(.callout)
+
+            if !progress.fallbackDateFiles.isEmpty {
+                Label("\(progress.fallbackDateFiles.count) file(s) used filesystem date", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+            }
+
+            if !progress.errors.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Errors", systemImage: "xmark.circle")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(progress.errors.enumerated()), id: \.offset) { _, error in
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(error.file)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    Text(error.message)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 100)
+                }
             }
 
             Divider()
