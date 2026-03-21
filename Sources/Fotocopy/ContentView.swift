@@ -59,6 +59,7 @@ struct ContentView: View {
             if !autoOpenVolume.isEmpty {
                 volumeWatcher.startWatching(volumeName: autoOpenVolume)
             }
+            runPreview()
         }
         .onDisappear {
             volumeWatcher.stopWatching()
@@ -237,6 +238,7 @@ struct ContentView: View {
                 }
                 Button("Done") {
                     progress.reset()
+                    runPreview()
                 }
             }
         }
