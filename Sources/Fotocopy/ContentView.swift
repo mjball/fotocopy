@@ -130,7 +130,7 @@ struct ContentView: View {
                 Button("Start Import") {
                     startImport()
                 }
-                .disabled(sourcePath.isEmpty || destinationPath.isEmpty || isPreviewing)
+                .disabled(sourcePath.isEmpty || destinationPath.isEmpty || isPreviewing || previewResult?.newFileCount == 0)
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
