@@ -285,6 +285,7 @@ struct ContentView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = true
         let currentPath = self[keyPath: keyPath]
         if !currentPath.isEmpty {
             panel.directoryURL = URL(fileURLWithPath: currentPath)
@@ -308,10 +309,13 @@ struct ContentView: View {
         previewTask = Task {
             let engine = ImportEngine()
             let checker = DuplicateChecker()
+            let resolver = PhotosLibraryResolver.resolve(for: src)
 
             do {
                 try await checker.buildIndex(at: dst)
-                let result = try await engine.previewImport(source: src, duplicateChecker: checker)
+                let result = try await engine.previewImport(
+                    source: src, duplicateChecker: checker, resolver: resolver
+                )
                 if !Task.isCancelled {
                     previewResult = result
                 }
@@ -338,6 +342,7 @@ struct ContentView: View {
         importTask = Task {
             let engine = ImportEngine()
             let checker = DuplicateChecker()
+            let resolver = PhotosLibraryResolver.resolve(for: src)
 
             do {
                 try await checker.buildIndex(at: dst)
@@ -366,7 +371,8 @@ struct ContentView: View {
                     mode: mode,
                     duplicateChecker: checker,
                     progress: progress,
-                    previewResult: preview
+                    previewResult: preview,
+                    resolver: resolver
                 )
             } catch {
                 if !Task.isCancelled {

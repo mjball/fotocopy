@@ -16,6 +16,10 @@ actor ImportEngine {
         "mov", "mp4", "m4v"
     ]
 
+    private static let skippedDirectories: Set<String> = [
+        "Cache", "Thumbnails", "resources", "Derivatives"
+    ]
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -26,14 +30,24 @@ actor ImportEngine {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: sourceURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
         var files: [URL] = []
         for case let fileURL as URL in enumerator {
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
-                  resourceValues.isRegularFile == true else { continue }
+            guard let resourceValues = try? fileURL.resourceValues(
+                forKeys: [.isRegularFileKey, .isDirectoryKey]
+            ) else { continue }
+
+            if resourceValues.isDirectory == true {
+                if Self.skippedDirectories.contains(fileURL.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            guard resourceValues.isRegularFile == true else { continue }
             let ext = fileURL.pathExtension.lowercased()
             if Self.supportedExtensions.contains(ext) {
                 files.append(fileURL)
@@ -44,7 +58,8 @@ actor ImportEngine {
 
     func previewImport(
         source: URL,
-        duplicateChecker: DuplicateChecker
+        duplicateChecker: DuplicateChecker,
+        resolver: PhotosLibraryResolver? = nil
     ) async throws -> PreviewResult {
         let files = try discoverFiles(in: source)
         let fm = FileManager.default
@@ -52,7 +67,8 @@ actor ImportEngine {
 
         for (index, fileURL) in files.enumerated() {
             if Task.isCancelled { break }
-            let filename = fileURL.lastPathComponent
+            let rawFilename = fileURL.lastPathComponent
+            let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
             guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
                   let fileSize = attrs[.size] as? Int else { continue }
             if await duplicateChecker.isDuplicate(filename: filename, size: fileSize) {
@@ -69,7 +85,8 @@ actor ImportEngine {
         mode: TransferMode,
         duplicateChecker: DuplicateChecker,
         progress: ImportProgress,
-        previewResult: PreviewResult? = nil
+        previewResult: PreviewResult? = nil,
+        resolver: PhotosLibraryResolver? = nil
     ) async throws {
         let fm = FileManager.default
         let maxConcurrency = 6
@@ -101,7 +118,8 @@ actor ImportEngine {
                         duplicateChecker: duplicateChecker,
                         progress: progress,
                         fileManager: fm,
-                        skipDuplicateCheck: previewResult != nil
+                        skipDuplicateCheck: previewResult != nil,
+                        resolver: resolver
                     )
                 }
                 running += 1
@@ -116,9 +134,11 @@ actor ImportEngine {
         duplicateChecker: DuplicateChecker,
         progress: ImportProgress,
         fileManager fm: FileManager,
-        skipDuplicateCheck: Bool = false
+        skipDuplicateCheck: Bool = false,
+        resolver: PhotosLibraryResolver? = nil
     ) async throws {
-        let filename = fileURL.lastPathComponent
+        let rawFilename = fileURL.lastPathComponent
+        let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
 
         await MainActor.run { progress.currentFile = filename }
 
@@ -170,8 +190,8 @@ actor ImportEngine {
 
             var finalDest = destFile
             if fm.fileExists(atPath: finalDest.path) {
-                let stem = fileURL.deletingPathExtension().lastPathComponent
-                let ext = fileURL.pathExtension
+                let stem = (filename as NSString).deletingPathExtension
+                let ext = (filename as NSString).pathExtension
                 var counter = 1
                 repeat {
                     finalDest = destDir.appendingPathComponent("\(stem)_\(counter).\(ext)")

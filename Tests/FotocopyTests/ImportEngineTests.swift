@@ -103,6 +103,26 @@ struct ImportEngineTests {
         #expect(files[0].lastPathComponent == "visible.jpg")
     }
 
+    @Test func discoverSkipsCacheDirectories() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let cache = dir.appendingPathComponent("Cache")
+        let thumbnails = dir.appendingPathComponent("Thumbnails")
+        let derivatives = dir.appendingPathComponent("Derivatives")
+        let resources = dir.appendingPathComponent("resources")
+        let originals = dir.appendingPathComponent("originals")
+        for sub in [cache, thumbnails, derivatives, resources, originals] {
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            try createFile(sub, name: "photo.jpg")
+        }
+
+        let engine = ImportEngine()
+        let files = try await engine.discoverFiles(in: dir)
+        #expect(files.count == 1)
+        #expect(files[0].path.contains("originals"))
+    }
+
     // MARK: - importFiles
 
     @Test func importCopyMode() async throws {
