@@ -8,6 +8,7 @@ struct PreviewFile: Sendable {
     let size: Int
     let date: Date?
     let dateSource: DateSource?
+    let cameraModel: String?
     let isDuplicate: Bool
 }
 
@@ -18,6 +19,16 @@ struct PreviewResult: Sendable {
         var counts: [String: Int] = [:]
         for file in files {
             counts[file.ext, default: 0] += 1
+        }
+        return counts
+    }
+
+    var cameraModelCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for file in files {
+            if let model = file.cameraModel {
+                counts[model, default: 0] += 1
+            }
         }
         return counts
     }
@@ -100,6 +111,7 @@ actor ImportEngine {
 
             let isDuplicate = await duplicateChecker.isDuplicate(filename: filename, size: fileSize)
             let dateResult = await EXIFDateReader.readDate(from: fileURL)
+            let cameraModel = EXIFDateReader.readCameraModel(from: fileURL)
 
             previewFiles.append(PreviewFile(
                 url: fileURL,
@@ -108,6 +120,7 @@ actor ImportEngine {
                 size: fileSize,
                 date: dateResult?.date,
                 dateSource: dateResult?.source,
+                cameraModel: cameraModel,
                 isDuplicate: isDuplicate
             ))
         }

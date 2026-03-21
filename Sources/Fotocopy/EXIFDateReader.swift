@@ -31,6 +31,16 @@ enum EXIFDateReader {
         return readFilesystemDate(from: url)
     }
 
+    static func readCameraModel(from url: URL) -> String? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return nil }
+        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
+           let model = tiff[kCGImagePropertyTIFFModel] as? String {
+            return model.trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
     private static func readImageDate(from url: URL) -> DateResult? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return nil }

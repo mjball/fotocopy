@@ -701,6 +701,89 @@ struct ImportEngineTests {
         #expect(skipped == 1)
     }
 
+    // MARK: - Camera model
+
+    @Test func previewReadsCameraModel() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        let file = src.appendingPathComponent("canon.jpg")
+        try createMinimalJPEGWithEXIF(at: file, dateString: "2024:01:01 00:00:00", cameraModel: "Canon EOS R6 Mark III")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        #expect(preview.files[0].cameraModel == "Canon EOS R6 Mark III")
+    }
+
+    @Test func previewCameraModelCounts() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("a.jpg"), dateString: "2024:01:01 00:00:00", cameraModel: "Canon EOS R6")
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("b.jpg"), dateString: "2024:01:02 00:00:00", cameraModel: "Canon EOS R6")
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("c.jpg"), dateString: "2024:01:03 00:00:00", cameraModel: "iPhone 15 Pro")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        let counts = preview.cameraModelCounts
+        #expect(counts["Canon EOS R6"] == 2)
+        #expect(counts["iPhone 15 Pro"] == 1)
+    }
+
+    @Test func filterByCameraModel() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("a.jpg"), dateString: "2024:01:01 00:00:00", cameraModel: "Canon EOS R6")
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("b.jpg"), dateString: "2024:01:02 00:00:00", cameraModel: "iPhone 15 Pro")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        let filter = ImportFilter(excludedCameraModels: ["iPhone 15 Pro"])
+        let filtered = preview.filtered(by: filter)
+        #expect(filtered.count == 1)
+        #expect(filtered[0].cameraModel == "Canon EOS R6")
+    }
+
+    @Test func filterByCameraModelImport() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("canon.jpg"), dateString: "2024:01:01 00:00:00", cameraModel: "Canon EOS R6")
+        try createMinimalJPEGWithEXIF(at: src.appendingPathComponent("phone.jpg"), dateString: "2024:01:02 00:00:00", cameraModel: "iPhone 15 Pro")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        let filter = ImportFilter(excludedCameraModels: ["iPhone 15 Pro"])
+        let filtered = preview.filtered(by: filter)
+        let progress = await ImportProgress()
+
+        try await engine.importFiles(
+            files: filtered, destination: dst, mode: .copy,
+            duplicateChecker: checker, progress: progress
+        )
+
+        let imported = try findImportedFiles(in: dst)
+        #expect(imported.count == 1)
+        #expect(imported[0].lastPathComponent == "canon.jpg")
+    }
+
     // MARK: - Helpers
 
     private func findImportedFiles(in dir: URL) throws -> [URL] {
@@ -720,7 +803,7 @@ struct ImportEngineTests {
         return files
     }
 
-    private func createMinimalJPEGWithEXIF(at url: URL, dateString: String) throws {
+    private func createMinimalJPEGWithEXIF(at url: URL, dateString: String, cameraModel: String? = nil) throws {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(
             data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
@@ -735,11 +818,16 @@ struct ImportEngineTests {
             throw NSError(domain: "test", code: 2)
         }
 
-        let props: [CFString: Any] = [
+        var props: [CFString: Any] = [
             kCGImagePropertyExifDictionary: [
                 kCGImagePropertyExifDateTimeOriginal: dateString
             ]
         ]
+        if let cameraModel {
+            props[kCGImagePropertyTIFFDictionary] = [
+                kCGImagePropertyTIFFModel: cameraModel
+            ] as [CFString: Any]
+        }
         CGImageDestinationAddImage(dest, cgImage, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
             throw NSError(domain: "test", code: 3)

@@ -68,7 +68,29 @@ struct EXIFDateReaderTests {
         #expect(year == 2020)
     }
 
-    private func createMinimalJPEGWithEXIF(at url: URL, dateString: String) throws {
+    @Test func readsCameraModel() throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let file = dir.appendingPathComponent("camera.jpg")
+        try createMinimalJPEGWithEXIF(at: file, dateString: "2024:01:01 00:00:00", cameraModel: "Canon EOS R6 Mark III")
+
+        let model = EXIFDateReader.readCameraModel(from: file)
+        #expect(model == "Canon EOS R6 Mark III")
+    }
+
+    @Test func cameraModelNilForNonImage() throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let file = dir.appendingPathComponent("plain.txt")
+        try Data("hello".utf8).write(to: file)
+
+        let model = EXIFDateReader.readCameraModel(from: file)
+        #expect(model == nil)
+    }
+
+    private func createMinimalJPEGWithEXIF(at url: URL, dateString: String, cameraModel: String? = nil) throws {
         let width = 1
         let height = 1
         let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -103,9 +125,14 @@ struct EXIFDateReaderTests {
         let exifProperties: [CFString: Any] = [
             kCGImagePropertyExifDateTimeOriginal: dateString
         ]
-        let properties: [CFString: Any] = [
+        var properties: [CFString: Any] = [
             kCGImagePropertyExifDictionary: exifProperties
         ]
+        if let cameraModel {
+            properties[kCGImagePropertyTIFFDictionary] = [
+                kCGImagePropertyTIFFModel: cameraModel
+            ] as [CFString: Any]
+        }
 
         CGImageDestinationAddImage(dest, cgImage, properties as CFDictionary)
 

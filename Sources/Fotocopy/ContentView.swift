@@ -8,6 +8,7 @@ struct ContentView: View {
     @AppStorage(PreferenceKeys.ejectSource) private var ejectSource = false
     @AppStorage(PreferenceKeys.ejectDestination) private var ejectDestination = false
     @AppStorage(PreferenceKeys.excludedExtensions) private var excludedExtensionsRaw = ""
+    @AppStorage(PreferenceKeys.excludedCameraModels) private var excludedCameraModelsRaw = ""
 
     @State private var progress = ImportProgress()
     @State private var volumeWatcher = VolumeWatcher()
@@ -20,15 +21,22 @@ struct ContentView: View {
     @State private var dateTo: Date?
     @State private var showDateFilter = false
 
+    private var isPhotosLibrarySource: Bool {
+        PhotosLibraryResolver.findPhotosLibraryRoot(from: URL(fileURLWithPath: sourcePath)) != nil
+    }
+
     private var excludedExtensions: Set<String> {
-        get {
-            Set(excludedExtensionsRaw.split(separator: ",").map { String($0) })
-        }
+        Set(excludedExtensionsRaw.split(separator: ",").map { String($0) })
+    }
+
+    private var excludedCameraModels: Set<String> {
+        Set(excludedCameraModelsRaw.split(separator: ",").map { String($0) })
     }
 
     private var activeFilter: ImportFilter {
         ImportFilter(
             excludedExtensions: excludedExtensions,
+            excludedCameraModels: excludedCameraModels,
             dateFrom: dateFrom,
             dateTo: dateTo
         )
@@ -122,16 +130,33 @@ struct ContentView: View {
     }
 
     private var modeSection: some View {
-        HStack {
-            Text("Mode:")
-                .frame(width: 80, alignment: .trailing)
-            Picker("", selection: $transferMode) {
-                Text("Copy").tag(TransferMode.copy.rawValue)
-                Text("Move").tag(TransferMode.move.rawValue)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Mode:")
+                    .frame(width: 80, alignment: .trailing)
+                Picker("", selection: $transferMode) {
+                    Text("Copy").tag(TransferMode.copy.rawValue)
+                    Text("Move (delete source)").tag(TransferMode.move.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+                .disabled(isPhotosLibrarySource)
+                Spacer()
             }
-            .pickerStyle(.segmented)
-            .frame(width: 160)
-            Spacer()
+            if isPhotosLibrarySource {
+                HStack {
+                    Spacer()
+                        .frame(width: 84)
+                    Label("Move disabled — would corrupt Photos library", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .onChange(of: sourcePath) { _, _ in
+            if isPhotosLibrarySource {
+                transferMode = TransferMode.copy.rawValue
+            }
         }
     }
 
@@ -187,6 +212,10 @@ struct ContentView: View {
 
                 extensionChips(preview: preview)
 
+                if !preview.cameraModelCounts.isEmpty {
+                    cameraModelChips(preview: preview)
+                }
+
                 if let range = preview.dateRange {
                     dateRangeRow(range: range)
                 }
@@ -220,6 +249,38 @@ struct ContentView: View {
                                 .strokeBorder(isExcluded ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4), lineWidth: 1)
                         )
                         .cornerRadius(12)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func cameraModelChips(preview: PreviewResult) -> some View {
+        let counts = preview.cameraModelCounts
+        let sorted = counts.sorted { $0.value > $1.value }
+
+        return FlowLayout(spacing: 6) {
+            ForEach(sorted, id: \.key) { model, count in
+                let isExcluded = excludedCameraModels.contains(model)
+                Button {
+                    toggleCameraModel(model)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "camera")
+                            .font(.caption2)
+                        Text("\(model) \(count)")
+                    }
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(isExcluded ? .clear : Color.accentColor.opacity(0.15))
+                    .foregroundStyle(isExcluded ? .secondary : .primary)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(isExcluded ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
                 }
                 .buttonStyle(.plain)
             }
@@ -391,14 +452,6 @@ struct ContentView: View {
                 }
             }
 
-            Divider()
-
-            HStack(spacing: 16) {
-                Toggle("Eject source", isOn: $ejectSource)
-                Toggle("Eject destination", isOn: $ejectDestination)
-            }
-            .font(.callout)
-
             HStack {
                 if ejectSource || ejectDestination {
                     Button("Eject & Quit") {
@@ -432,6 +485,16 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("After import:")
+                    .font(.callout)
+                Toggle("Eject source volume", isOn: $ejectSource)
+                Toggle("Eject destination volume", isOn: $ejectDestination)
+            }
+            .font(.callout)
 
             HStack {
                 Spacer()
@@ -473,6 +536,16 @@ struct ContentView: View {
             set.insert(ext)
         }
         excludedExtensionsRaw = set.sorted().joined(separator: ",")
+    }
+
+    private func toggleCameraModel(_ model: String) {
+        var set = excludedCameraModels
+        if set.contains(model) {
+            set.remove(model)
+        } else {
+            set.insert(model)
+        }
+        excludedCameraModelsRaw = set.sorted().joined(separator: ",")
     }
 
     private func formatDateRange(_ min: Date, _ max: Date) -> String {
