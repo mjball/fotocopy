@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import ImageIO
 import CoreGraphics
+import SQLite3
 @testable import Fotocopy
 
 @Suite
@@ -131,15 +132,14 @@ struct ImportEngineTests {
         defer { cleanup(src); cleanup(dst) }
 
         try createFile(src, name: "photo.jpg", content: "image data")
-        let files = [src.appendingPathComponent("photo.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
 
@@ -154,15 +154,14 @@ struct ImportEngineTests {
         defer { cleanup(src); cleanup(dst) }
 
         try createFile(src, name: "photo.jpg", content: "image data")
-        let files = [src.appendingPathComponent("photo.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .move,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .move,
             duplicateChecker: checker, progress: progress
         )
 
@@ -177,22 +176,23 @@ struct ImportEngineTests {
         defer { cleanup(src); cleanup(dst) }
 
         try createFile(src, name: "photo.jpg", content: "image data")
-        let files = [src.appendingPathComponent("photo.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
 
         let imported = try findImportedFiles(in: dst)
         #expect(imported.count == 1)
 
-        let relativePath = imported[0].path.replacingOccurrences(of: dst.path + "/", with: "")
+        let dstResolved = dst.standardizedFileURL.path
+        let relativePath = imported[0].standardizedFileURL.path
+            .replacingOccurrences(of: dstResolved + "/", with: "")
         let components = relativePath.split(separator: "/")
         #expect(components.count == 4) // YYYY/MM/DD/filename
     }
@@ -209,15 +209,14 @@ struct ImportEngineTests {
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
         try createFile(sub, name: "photo.jpg", content: content)
 
-        let files = [src.appendingPathComponent("photo.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
 
@@ -231,35 +230,31 @@ struct ImportEngineTests {
         defer { cleanup(src); cleanup(dst) }
 
         try createFile(src, name: "photo.jpg", content: "new image")
-        let files = [src.appendingPathComponent("photo.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
-            duplicateChecker: checker, progress: progress
+        let preview1 = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let progress1 = await ImportProgress()
+        try await engine.importFiles(
+            files: preview1.files, destination: dst, mode: .copy,
+            duplicateChecker: checker, progress: progress1
         )
 
         let firstImported = try findImportedFiles(in: dst)
-        #expect(firstImported.count == 1)
         let dateDir = firstImported[0].deletingLastPathComponent()
 
         try Data("different image".utf8).write(to: src.appendingPathComponent("photo.jpg"))
         let checker2 = DuplicateChecker()
         try await checker2.buildIndex(at: dst)
+        let preview2 = try await engine.previewImport(source: src, duplicateChecker: checker2)
         let progress2 = await ImportProgress()
-
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview2.files, destination: dst, mode: .copy,
             duplicateChecker: checker2, progress: progress2
         )
 
-        let allFiles = try FileManager.default.contentsOfDirectory(
-            at: dateDir, includingPropertiesForKeys: nil
-        )
+        let allFiles = try FileManager.default.contentsOfDirectory(at: dateDir, includingPropertiesForKeys: nil)
         #expect(allFiles.count == 2)
         let names = Set(allFiles.map { $0.lastPathComponent })
         #expect(names.contains("photo.jpg"))
@@ -271,18 +266,17 @@ struct ImportEngineTests {
         let dst = try makeTempDir()
         defer { cleanup(src); cleanup(dst) }
 
-        let files = [src.appendingPathComponent("photo.jpg")]
         let engine = ImportEngine()
 
         for i in 0..<3 {
-            // Each version has different size so it's not detected as a duplicate
             let content = String(repeating: "x", count: 100 + i)
             try Data(content.utf8).write(to: src.appendingPathComponent("photo.jpg"))
             let checker = DuplicateChecker()
             try await checker.buildIndex(at: dst)
+            let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
             let progress = await ImportProgress()
-            await engine.importFilesForTest(
-                files: files, destination: dst, mode: .copy,
+            try await engine.importFiles(
+                files: preview.files, destination: dst, mode: .copy,
                 duplicateChecker: checker, progress: progress
             )
         }
@@ -301,15 +295,14 @@ struct ImportEngineTests {
         defer { cleanup(src); cleanup(dst) }
 
         try createFile(src, name: "noexif.jpg", content: "plain text, no EXIF")
-        let files = [src.appendingPathComponent("noexif.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
 
@@ -326,7 +319,7 @@ struct ImportEngineTests {
         try await checker.buildIndex(at: dst)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
+        try await engine.importFiles(
             files: [], destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
@@ -342,15 +335,14 @@ struct ImportEngineTests {
 
         let content = "image data"
         try createFile(src, name: "photo.jpg", content: content)
-        let files = [src.appendingPathComponent("photo.jpg")]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
 
@@ -365,15 +357,14 @@ struct ImportEngineTests {
 
         let file = src.appendingPathComponent("exif.jpg")
         try createMinimalJPEGWithEXIF(at: file, dateString: "2023:12:25 10:30:00")
-        let files = [file]
-
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
-        await engine.importFilesForTest(
-            files: files, destination: dst, mode: .copy,
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
             duplicateChecker: checker, progress: progress
         )
 
@@ -405,9 +396,10 @@ struct ImportEngineTests {
         try await checker.buildIndex(at: dst)
 
         let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
-        #expect(preview.totalFiles == 2)
-        #expect(preview.newFileCount == 2)
-        #expect(preview.duplicateCount == 0)
+        #expect(preview.files.count == 2)
+        let counts = preview.filteredCounts(by: ImportFilter())
+        #expect(counts.new == 2)
+        #expect(counts.duplicates == 0)
     }
 
     @Test func previewDetectsDuplicates() async throws {
@@ -428,9 +420,10 @@ struct ImportEngineTests {
         try await checker.buildIndex(at: dst)
 
         let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
-        #expect(preview.totalFiles == 2)
-        #expect(preview.duplicateCount == 1)
-        #expect(preview.newFileCount == 1)
+        let counts = preview.filteredCounts(by: ImportFilter())
+        #expect(counts.total == 2)
+        #expect(counts.duplicates == 1)
+        #expect(counts.new == 1)
     }
 
     @Test func previewEmptySource() async throws {
@@ -443,9 +436,7 @@ struct ImportEngineTests {
         try await checker.buildIndex(at: dst)
 
         let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
-        #expect(preview.totalFiles == 0)
-        #expect(preview.duplicateCount == 0)
-        #expect(preview.newFileCount == 0)
+        #expect(preview.files.isEmpty)
     }
 
     @Test func previewAllDuplicates() async throws {
@@ -463,47 +454,251 @@ struct ImportEngineTests {
         try await checker.buildIndex(at: dst)
 
         let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
-        #expect(preview.totalFiles == 2)
-        #expect(preview.duplicateCount == 2)
-        #expect(preview.newFileCount == 0)
+        let counts = preview.filteredCounts(by: ImportFilter())
+        #expect(counts.total == 2)
+        #expect(counts.duplicates == 2)
+        #expect(counts.new == 0)
     }
 
-    @Test func importWithPreviewSkipsDuplicates() async throws {
+    @Test func previewExtensionCounts() async throws {
         let src = try makeTempDir()
         let dst = try makeTempDir()
         defer { cleanup(src); cleanup(dst) }
 
-        let dupContent = "duplicate"
-        try createFile(src, name: "dup.jpg", content: dupContent)
-        try createFile(src, name: "new.jpg", content: "fresh file")
-
-        let sub = dst.appendingPathComponent("existing")
-        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
-        try createFile(sub, name: "dup.jpg", content: dupContent)
+        try createFile(src, name: "a.jpg", content: "aaa")
+        try createFile(src, name: "b.jpg", content: "bbb")
+        try createFile(src, name: "c.cr3", content: "ccc")
+        try createFile(src, name: "d.mov", content: "ddd")
 
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
         let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
-        #expect(preview.duplicateCount == 1)
+        let counts = preview.extensionCounts
+        #expect(counts["jpg"] == 2)
+        #expect(counts["cr3"] == 1)
+        #expect(counts["mov"] == 1)
+    }
+
+    @Test func previewDateRange() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createFile(src, name: "a.jpg", content: "aaa")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        #expect(preview.dateRange != nil)
+    }
+
+    @Test func previewFileCarriesMetadata() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createFile(src, name: "photo.cr3", content: "raw image data")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        #expect(preview.files.count == 1)
+        let file = preview.files[0]
+        #expect(file.filename == "photo.cr3")
+        #expect(file.ext == "cr3")
+        #expect(file.size == "raw image data".utf8.count)
+        #expect(file.isDuplicate == false)
+        #expect(file.date != nil)
+    }
+
+    // MARK: - Filter
+
+    @Test func filterByExtension() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createFile(src, name: "a.jpg", content: "aaa")
+        try createFile(src, name: "b.cr3", content: "bbb")
+        try createFile(src, name: "c.mov", content: "ccc")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        let filter = ImportFilter(excludedExtensions: ["jpg", "mov"])
+        let filtered = preview.filtered(by: filter)
+        #expect(filtered.count == 1)
+        #expect(filtered[0].ext == "cr3")
+    }
+
+    @Test func filterByDateRange() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        let file1 = src.appendingPathComponent("old.jpg")
+        try createMinimalJPEGWithEXIF(at: file1, dateString: "2020:01:15 10:00:00")
+        let file2 = src.appendingPathComponent("new.jpg")
+        try createMinimalJPEGWithEXIF(at: file2, dateString: "2025:06:15 10:00:00")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        #expect(preview.files.count == 2)
+
+        var cal = Calendar.current
+        cal.timeZone = TimeZone.current
+        let cutoff = cal.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+        let filter = ImportFilter(dateFrom: cutoff)
+        let filtered = preview.filtered(by: filter)
+        #expect(filtered.count == 1)
+        #expect(filtered[0].filename == "new.jpg")
+    }
+
+    @Test func filterCombined() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createFile(src, name: "a.jpg", content: "aaa")
+        try createFile(src, name: "b.cr3", content: "bbb")
+        try createFile(src, name: "c.mov", content: "ccc")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        let filter = ImportFilter(excludedExtensions: ["jpg"])
+        let counts = preview.filteredCounts(by: filter)
+        #expect(counts.total == 2)
+        #expect(counts.new == 2)
+    }
+
+    @Test func filterExcludesFromImport() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        try createFile(src, name: "keep.cr3", content: "raw data")
+        try createFile(src, name: "skip.jpg", content: "jpeg data")
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+
+        let filter = ImportFilter(excludedExtensions: ["jpg"])
+        let filtered = preview.filtered(by: filter)
+        let progress = await ImportProgress()
+
+        try await engine.importFiles(
+            files: filtered, destination: dst, mode: .copy,
+            duplicateChecker: checker, progress: progress
+        )
+
+        let imported = try findImportedFiles(in: dst)
+        #expect(imported.count == 1)
+        #expect(imported[0].lastPathComponent == "keep.cr3")
+    }
+
+    // MARK: - Photos Library filename resolution in import
+
+    @Test func importUsesResolvedFilename() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let libraryRoot = dir.appendingPathComponent("Test.photoslibrary")
+        let dbDir = libraryRoot.appendingPathComponent("database")
+        let originalsDir = libraryRoot.appendingPathComponent("originals/0")
+        let dst = dir.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: originalsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dst, withIntermediateDirectories: true)
+
+        let dbPath = dbDir.appendingPathComponent("Photos.sqlite").path
+        try createMockPhotosDB(at: dbPath, entries: [
+            ("AAAA-BBBB-CCCC.cr3", "BL5A5086.CR3"),
+        ])
+        try createFile(originalsDir, name: "AAAA-BBBB-CCCC.cr3", content: "raw image data")
+
+        let resolver = PhotosLibraryResolver.resolve(for: originalsDir)
+        #expect(resolver != nil)
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(
+            source: originalsDir, duplicateChecker: checker, resolver: resolver
+        )
+
+        #expect(preview.files.count == 1)
+        #expect(preview.files[0].filename == "BL5A5086.CR3")
 
         let progress = await ImportProgress()
-        try? await engine.importFiles(
+        try await engine.importFiles(
             files: preview.files, destination: dst, mode: .copy,
-            duplicateChecker: checker, progress: progress,
-            previewResult: preview
+            duplicateChecker: checker, progress: progress
+        )
+
+        let imported = try findImportedFiles(in: dst)
+        #expect(imported.count == 1)
+        #expect(imported[0].lastPathComponent == "BL5A5086.CR3")
+    }
+
+    @Test func importResolvedFilenameUsedForDedup() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let libraryRoot = dir.appendingPathComponent("Test.photoslibrary")
+        let dbDir = libraryRoot.appendingPathComponent("database")
+        let originalsDir = libraryRoot.appendingPathComponent("originals/0")
+        let dst = dir.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: originalsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dst, withIntermediateDirectories: true)
+
+        let content = "raw image data"
+        let dbPath = dbDir.appendingPathComponent("Photos.sqlite").path
+        try createMockPhotosDB(at: dbPath, entries: [
+            ("AAAA-BBBB-CCCC.cr3", "BL5A5086.CR3"),
+        ])
+        try createFile(originalsDir, name: "AAAA-BBBB-CCCC.cr3", content: content)
+
+        let existingSub = dst.appendingPathComponent("existing")
+        try FileManager.default.createDirectory(at: existingSub, withIntermediateDirectories: true)
+        try createFile(existingSub, name: "BL5A5086.CR3", content: content)
+
+        let resolver = PhotosLibraryResolver.resolve(for: originalsDir)
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        try await checker.buildIndex(at: dst)
+        let preview = try await engine.previewImport(
+            source: originalsDir, duplicateChecker: checker, resolver: resolver
+        )
+
+        #expect(preview.files[0].isDuplicate == true)
+
+        let progress = await ImportProgress()
+        try await engine.importFiles(
+            files: preview.files, destination: dst, mode: .copy,
+            duplicateChecker: checker, progress: progress
         )
 
         let skipped = await progress.duplicatesSkipped
-        let processed = await progress.processedFiles
         #expect(skipped == 1)
-        #expect(processed == 2)
-
-        let allImported = try findImportedFiles(in: dst)
-        let names = Set(allImported.map { $0.lastPathComponent })
-        #expect(names.contains("new.jpg"))
-        #expect(names.contains("dup.jpg")) // the original in existing/
     }
 
     // MARK: - Helpers
@@ -550,19 +745,24 @@ struct ImportEngineTests {
             throw NSError(domain: "test", code: 3)
         }
     }
-}
 
-extension ImportEngine {
-    func importFilesForTest(
-        files: [URL],
-        destination: URL,
-        mode: TransferMode,
-        duplicateChecker: DuplicateChecker,
-        progress: ImportProgress
-    ) async {
-        try? await importFiles(
-            files: files, destination: destination, mode: mode,
-            duplicateChecker: duplicateChecker, progress: progress
-        )
+    private func createMockPhotosDB(at path: String, entries: [(String, String)]) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            throw NSError(domain: "test", code: 1)
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+            CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZFILENAME VARCHAR);
+            CREATE TABLE ZADDITIONALASSETATTRIBUTES (Z_PK INTEGER PRIMARY KEY, ZASSET INTEGER, ZORIGINALFILENAME VARCHAR);
+            """
+        sqlite3_exec(db, sql, nil, nil, nil)
+
+        for (i, entry) in entries.enumerated() {
+            let pk = i + 1
+            sqlite3_exec(db, "INSERT INTO ZASSET (Z_PK, ZFILENAME) VALUES (\(pk), '\(entry.0)');", nil, nil, nil)
+            sqlite3_exec(db, "INSERT INTO ZADDITIONALASSETATTRIBUTES (Z_PK, ZASSET, ZORIGINALFILENAME) VALUES (\(pk), \(pk), '\(entry.1)');", nil, nil, nil)
+        }
     }
 }

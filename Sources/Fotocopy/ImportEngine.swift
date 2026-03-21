@@ -1,12 +1,42 @@
 import Foundation
 import AVFoundation
 
+struct PreviewFile: Sendable {
+    let url: URL
+    let filename: String
+    let ext: String
+    let size: Int
+    let date: Date?
+    let dateSource: DateSource?
+    let isDuplicate: Bool
+}
+
 struct PreviewResult: Sendable {
-    let files: [URL]
-    let duplicateIndices: Set<Int>
-    var totalFiles: Int { files.count }
-    var duplicateCount: Int { duplicateIndices.count }
-    var newFileCount: Int { totalFiles - duplicateCount }
+    let files: [PreviewFile]
+
+    var extensionCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for file in files {
+            counts[file.ext, default: 0] += 1
+        }
+        return counts
+    }
+
+    var dateRange: (min: Date, max: Date)? {
+        let dates = files.compactMap(\.date)
+        guard let min = dates.min(), let max = dates.max() else { return nil }
+        return (min, max)
+    }
+
+    func filtered(by filter: ImportFilter) -> [PreviewFile] {
+        files.filter { filter.includes($0) }
+    }
+
+    func filteredCounts(by filter: ImportFilter) -> (total: Int, new: Int, duplicates: Int) {
+        let matched = filtered(by: filter)
+        let dupes = matched.filter(\.isDuplicate).count
+        return (matched.count, matched.count - dupes, dupes)
+    }
 }
 
 actor ImportEngine {
@@ -19,12 +49,6 @@ actor ImportEngine {
     private static let skippedDirectories: Set<String> = [
         "Cache", "Thumbnails", "resources", "Derivatives"
     ]
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f
-    }()
 
     func discoverFiles(in sourceURL: URL) throws -> [URL] {
         let fm = FileManager.default
@@ -61,32 +85,42 @@ actor ImportEngine {
         duplicateChecker: DuplicateChecker,
         resolver: PhotosLibraryResolver? = nil
     ) async throws -> PreviewResult {
-        let files = try discoverFiles(in: source)
+        let urls = try discoverFiles(in: source)
         let fm = FileManager.default
-        var duplicateIndices: Set<Int> = []
+        var previewFiles: [PreviewFile] = []
 
-        for (index, fileURL) in files.enumerated() {
+        for fileURL in urls {
             if Task.isCancelled { break }
             let rawFilename = fileURL.lastPathComponent
             let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
+            let ext = (filename as NSString).pathExtension.lowercased()
+
             guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
                   let fileSize = attrs[.size] as? Int else { continue }
-            if await duplicateChecker.isDuplicate(filename: filename, size: fileSize) {
-                duplicateIndices.insert(index)
-            }
+
+            let isDuplicate = await duplicateChecker.isDuplicate(filename: filename, size: fileSize)
+            let dateResult = await EXIFDateReader.readDate(from: fileURL)
+
+            previewFiles.append(PreviewFile(
+                url: fileURL,
+                filename: filename,
+                ext: ext,
+                size: fileSize,
+                date: dateResult?.date,
+                dateSource: dateResult?.source,
+                isDuplicate: isDuplicate
+            ))
         }
 
-        return PreviewResult(files: files, duplicateIndices: duplicateIndices)
+        return PreviewResult(files: previewFiles)
     }
 
     func importFiles(
-        files: [URL],
+        files: [PreviewFile],
         destination: URL,
         mode: TransferMode,
         duplicateChecker: DuplicateChecker,
-        progress: ImportProgress,
-        previewResult: PreviewResult? = nil,
-        resolver: PhotosLibraryResolver? = nil
+        progress: ImportProgress
     ) async throws {
         let fm = FileManager.default
         let maxConcurrency = 6
@@ -94,10 +128,10 @@ actor ImportEngine {
         await withThrowingTaskGroup(of: Void.self) { group in
             var running = 0
 
-            for (index, fileURL) in files.enumerated() {
+            for file in files {
                 if Task.isCancelled { break }
 
-                if let preview = previewResult, preview.duplicateIndices.contains(index) {
+                if file.isDuplicate {
                     await MainActor.run {
                         progress.duplicatesSkipped += 1
                         progress.processedFiles += 1
@@ -112,14 +146,12 @@ actor ImportEngine {
 
                 group.addTask {
                     try await self.processFile(
-                        fileURL: fileURL,
+                        file: file,
                         destination: destination,
                         mode: mode,
                         duplicateChecker: duplicateChecker,
                         progress: progress,
-                        fileManager: fm,
-                        skipDuplicateCheck: previewResult != nil,
-                        resolver: resolver
+                        fileManager: fm
                     )
                 }
                 running += 1
@@ -128,38 +160,18 @@ actor ImportEngine {
     }
 
     private func processFile(
-        fileURL: URL,
+        file: PreviewFile,
         destination: URL,
         mode: TransferMode,
         duplicateChecker: DuplicateChecker,
         progress: ImportProgress,
-        fileManager fm: FileManager,
-        skipDuplicateCheck: Bool = false,
-        resolver: PhotosLibraryResolver? = nil
+        fileManager fm: FileManager
     ) async throws {
-        let rawFilename = fileURL.lastPathComponent
-        let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
+        let filename = file.filename
 
         await MainActor.run { progress.currentFile = filename }
 
-        guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
-              let fileSize = attrs[.size] as? Int else {
-            await MainActor.run {
-                progress.errors.append((file: filename, message: "Could not read file size"))
-                progress.processedFiles += 1
-            }
-            return
-        }
-
-        if !skipDuplicateCheck, await duplicateChecker.isDuplicate(filename: filename, size: fileSize) {
-            await MainActor.run {
-                progress.duplicatesSkipped += 1
-                progress.processedFiles += 1
-            }
-            return
-        }
-
-        guard let dateResult = await EXIFDateReader.readDate(from: fileURL) else {
+        guard let date = file.date else {
             await MainActor.run {
                 progress.errors.append((file: filename, message: "Could not determine date"))
                 progress.processedFiles += 1
@@ -167,14 +179,14 @@ actor ImportEngine {
             return
         }
 
-        if dateResult.source == .filesystem {
+        if file.dateSource == .filesystem {
             await MainActor.run {
                 progress.fallbackDateFiles.append(filename)
             }
         }
 
         let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month, .day], from: dateResult.date)
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
         let year = String(format: "%04d", components.year ?? 0)
         let month = String(format: "%02d", components.month ?? 0)
         let day = String(format: "%02d", components.day ?? 0)
@@ -201,12 +213,12 @@ actor ImportEngine {
 
             switch mode {
             case .copy:
-                try fm.copyItem(at: fileURL, to: finalDest)
+                try fm.copyItem(at: file.url, to: finalDest)
             case .move:
-                try fm.moveItem(at: fileURL, to: finalDest)
+                try fm.moveItem(at: file.url, to: finalDest)
             }
 
-            await duplicateChecker.markImported(filename: filename, size: fileSize)
+            await duplicateChecker.markImported(filename: filename, size: file.size)
         } catch {
             await MainActor.run {
                 progress.errors.append((file: filename, message: error.localizedDescription))

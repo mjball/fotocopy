@@ -12,4 +12,18 @@ enum PreferenceKeys {
     static let autoOpenVolume = "autoOpenVolume"
     static let ejectSource = "ejectSource"
     static let ejectDestination = "ejectDestination"
+    static let excludedExtensions = "excludedExtensions"
+}
+
+struct ImportFilter: Sendable {
+    var excludedExtensions: Set<String> = []
+    var dateFrom: Date? = nil
+    var dateTo: Date? = nil
+
+    func includes(_ file: PreviewFile) -> Bool {
+        if excludedExtensions.contains(file.ext) { return false }
+        if let from = dateFrom, let date = file.date, date < from { return false }
+        if let to = dateTo, let date = file.date, date > Calendar.current.date(byAdding: .day, value: 1, to: to)! { return false }
+        return true
+    }
 }

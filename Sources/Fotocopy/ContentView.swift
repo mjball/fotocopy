@@ -7,6 +7,7 @@ struct ContentView: View {
     @AppStorage(PreferenceKeys.autoOpenVolume) private var autoOpenVolume = ""
     @AppStorage(PreferenceKeys.ejectSource) private var ejectSource = false
     @AppStorage(PreferenceKeys.ejectDestination) private var ejectDestination = false
+    @AppStorage(PreferenceKeys.excludedExtensions) private var excludedExtensionsRaw = ""
 
     @State private var progress = ImportProgress()
     @State private var volumeWatcher = VolumeWatcher()
@@ -15,6 +16,27 @@ struct ContentView: View {
     @State private var previewResult: PreviewResult?
     @State private var isPreviewing = false
     @State private var showingSettings = false
+    @State private var dateFrom: Date?
+    @State private var dateTo: Date?
+    @State private var showDateFilter = false
+
+    private var excludedExtensions: Set<String> {
+        get {
+            Set(excludedExtensionsRaw.split(separator: ",").map { String($0) })
+        }
+    }
+
+    private var activeFilter: ImportFilter {
+        ImportFilter(
+            excludedExtensions: excludedExtensions,
+            dateFrom: dateFrom,
+            dateTo: dateTo
+        )
+    }
+
+    private var filteredNewCount: Int {
+        previewResult?.filteredCounts(by: activeFilter).new ?? 0
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -126,35 +148,47 @@ struct ContentView: View {
                 Button("Start Import") {
                     startImport()
                 }
-                .disabled(sourcePath.isEmpty || destinationPath.isEmpty || isPreviewing || previewResult?.newFileCount == 0)
+                .disabled(sourcePath.isEmpty || destinationPath.isEmpty || isPreviewing || filteredNewCount == 0)
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
     }
 
     private var previewSection: some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             if isPreviewing {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Scanning...")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Cancel") {
-                    previewTask?.cancel()
-                    previewTask = nil
-                    isPreviewing = false
-                    previewResult = nil
-                }
-                .controlSize(.small)
-            } else if let preview = previewResult {
-                Label("\(preview.totalFiles) files found", systemImage: "photo.on.rectangle")
-                Spacer()
-                Text("\(preview.newFileCount) new")
-                    .foregroundStyle(.green)
-                if preview.duplicateCount > 0 {
-                    Text("\(preview.duplicateCount) duplicates")
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Scanning...")
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") {
+                        previewTask?.cancel()
+                        previewTask = nil
+                        isPreviewing = false
+                        previewResult = nil
+                    }
+                    .controlSize(.small)
+                }
+            } else if let preview = previewResult {
+                let counts = preview.filteredCounts(by: activeFilter)
+
+                HStack {
+                    Label("\(counts.total) files", systemImage: "photo.on.rectangle")
+                    Spacer()
+                    Text("\(counts.new) new")
+                        .foregroundStyle(counts.new > 0 ? .green : .secondary)
+                    if counts.duplicates > 0 {
+                        Text("\(counts.duplicates) duplicates")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                extensionChips(preview: preview)
+
+                if let range = preview.dateRange {
+                    dateRangeRow(range: range)
                 }
             }
         }
@@ -162,6 +196,91 @@ struct ContentView: View {
         .padding(10)
         .background(.quaternary.opacity(0.5))
         .cornerRadius(8)
+    }
+
+    private func extensionChips(preview: PreviewResult) -> some View {
+        let counts = preview.extensionCounts
+        let sortedExts = counts.sorted { $0.value > $1.value }
+
+        return FlowLayout(spacing: 6) {
+            ForEach(sortedExts, id: \.key) { ext, count in
+                let isExcluded = excludedExtensions.contains(ext)
+                Button {
+                    toggleExtension(ext)
+                } label: {
+                    Text("\(ext.uppercased()) \(count)")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(isExcluded ? .clear : Color.accentColor.opacity(0.15))
+                        .foregroundStyle(isExcluded ? .secondary : .primary)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(isExcluded ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4), lineWidth: 1)
+                        )
+                        .cornerRadius(12)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func dateRangeRow(range: (min: Date, max: Date)) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "calendar")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Text(formatDateRange(range.min, range.max))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if dateFrom != nil || dateTo != nil {
+                    Button("Clear") {
+                        dateFrom = nil
+                        dateTo = nil
+                        showDateFilter = false
+                    }
+                    .font(.caption)
+                    .controlSize(.small)
+                }
+                Button(showDateFilter ? "Hide" : "Filter") {
+                    showDateFilter.toggle()
+                }
+                .font(.caption)
+                .controlSize(.small)
+            }
+
+            if showDateFilter {
+                HStack(spacing: 12) {
+                    HStack(spacing: 4) {
+                        Text("From:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        DatePicker("", selection: Binding(
+                            get: { dateFrom ?? range.min },
+                            set: { dateFrom = $0 }
+                        ), in: range.min...range.max, displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                        .labelsHidden()
+                        .controlSize(.small)
+                    }
+                    HStack(spacing: 4) {
+                        Text("To:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        DatePicker("", selection: Binding(
+                            get: { dateTo ?? range.max },
+                            set: { dateTo = $0 }
+                        ), in: range.min...range.max, displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                        .labelsHidden()
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
     }
 
     private var progressSection: some View {
@@ -346,6 +465,23 @@ struct ContentView: View {
         }
     }
 
+    private func toggleExtension(_ ext: String) {
+        var set = excludedExtensions
+        if set.contains(ext) {
+            set.remove(ext)
+        } else {
+            set.insert(ext)
+        }
+        excludedExtensionsRaw = set.sorted().joined(separator: ",")
+    }
+
+    private func formatDateRange(_ min: Date, _ max: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return "\(formatter.string(from: min)) — \(formatter.string(from: max))"
+    }
+
     private func runPreview() {
         previewTask?.cancel()
         previewResult = nil
@@ -370,9 +506,7 @@ struct ContentView: View {
                 if !Task.isCancelled {
                     previewResult = result
                 }
-            } catch {
-                // Preview is best-effort; silently ignore errors
-            }
+            } catch {}
 
             isPreviewing = false
         }
@@ -381,49 +515,49 @@ struct ContentView: View {
     private func startImport() {
         progress.reset()
 
-        let src = URL(fileURLWithPath: sourcePath)
         let dst = URL(fileURLWithPath: destinationPath)
         let mode = TransferMode(rawValue: transferMode) ?? .copy
+        let filter = activeFilter
         let cachedPreview = previewResult
 
         previewTask?.cancel()
         previewResult = nil
         isPreviewing = false
+        dateFrom = nil
+        dateTo = nil
+        showDateFilter = false
 
         importTask = Task {
             let engine = ImportEngine()
             let checker = DuplicateChecker()
-            let resolver = PhotosLibraryResolver.resolve(for: src)
 
             do {
                 try await checker.buildIndex(at: dst)
 
-                let files: [URL]
-                let preview: PreviewResult?
+                let filesToImport: [PreviewFile]
 
                 if let cachedPreview {
-                    files = cachedPreview.files
-                    preview = cachedPreview
+                    filesToImport = cachedPreview.filtered(by: filter)
                 } else {
-                    progress.isScanning = true
-                    files = try await engine.discoverFiles(in: src)
-                    progress.isScanning = false
-                    preview = nil
+                    let src = URL(fileURLWithPath: sourcePath)
+                    let resolver = PhotosLibraryResolver.resolve(for: src)
+                    let preview = try await engine.previewImport(
+                        source: src, duplicateChecker: checker, resolver: resolver
+                    )
+                    filesToImport = preview.filtered(by: filter)
                 }
 
                 await MainActor.run {
-                    progress.totalFiles = files.count
+                    progress.totalFiles = filesToImport.count
                     progress.isImporting = true
                 }
 
                 try await engine.importFiles(
-                    files: files,
+                    files: filesToImport,
                     destination: dst,
                     mode: mode,
                     duplicateChecker: checker,
-                    progress: progress,
-                    previewResult: preview,
-                    resolver: resolver
+                    progress: progress
                 )
             } catch {
                 if !Task.isCancelled {
@@ -452,5 +586,45 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(500))
             NSApp.terminate(nil)
         }
+    }
+}
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxX: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+            maxX = max(maxX, x - spacing)
+        }
+
+        return (CGSize(width: maxX, height: y + rowHeight), positions)
     }
 }
