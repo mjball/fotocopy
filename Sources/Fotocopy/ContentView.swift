@@ -283,6 +283,10 @@ struct ContentView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        let currentPath = self[keyPath: keyPath]
+        if !currentPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: currentPath)
+        }
         if panel.runModal() == .OK, let url = panel.url {
             self[keyPath: keyPath] = url.path
         }
