@@ -49,6 +49,78 @@ enum EXIFDateReader {
         return f
     }()
 
+    struct ImageMetadata: Sendable {
+        let dateResult: DateResult?
+        let cameraModel: String?
+    }
+
+    static func readMetadata(from url: URL) async -> ImageMetadata {
+        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+
+            let dateResult = extractDate(from: properties)
+            let cameraModel = extractCameraModel(from: properties)
+
+            if let dateResult {
+                return ImageMetadata(dateResult: dateResult, cameraModel: cameraModel)
+            }
+
+            if let videoDate = await readVideoDate(from: url) {
+                return ImageMetadata(dateResult: videoDate, cameraModel: cameraModel)
+            }
+
+            let fsDate = readFilesystemDate(from: url)
+            return ImageMetadata(dateResult: fsDate, cameraModel: cameraModel)
+        }
+
+        if let videoDate = await readVideoDate(from: url) {
+            return ImageMetadata(dateResult: videoDate, cameraModel: nil)
+        }
+
+        return ImageMetadata(dateResult: readFilesystemDate(from: url), cameraModel: nil)
+    }
+
+    private static func extractDate(from properties: [CFString: Any]) -> DateResult? {
+        let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+
+        let offsetOriginal = exif?[kCGImagePropertyExifOffsetTimeOriginal] as? String
+        let offsetDigitized = exif?[kCGImagePropertyExifOffsetTimeDigitized] as? String
+        let offsetGeneral = exif?[kCGImagePropertyExifOffsetTime] as? String
+        let subSecOriginal = exif?["SubSecTimeOriginal" as CFString] as? String
+        let subSecDigitized = exif?["SubSecTimeDigitized" as CFString] as? String
+
+        if let dateStr = exif?[kCGImagePropertyExifDateTimeOriginal] as? String,
+           let date = parseExifDate(dateStr, offset: offsetOriginal ?? offsetGeneral, subSec: subSecOriginal) {
+            return DateResult(date: date, source: .exif)
+        }
+        if let dateStr = exif?[kCGImagePropertyExifDateTimeDigitized] as? String,
+           let date = parseExifDate(dateStr, offset: offsetDigitized ?? offsetGeneral, subSec: subSecDigitized) {
+            return DateResult(date: date, source: .exif)
+        }
+        if let dateStr = tiff?[kCGImagePropertyTIFFDateTime] as? String,
+           let date = parseExifDate(dateStr, offset: offsetGeneral, subSec: nil) {
+            return DateResult(date: date, source: .exif)
+        }
+        if let iptc = properties[kCGImagePropertyIPTCDictionary] as? [CFString: Any],
+           let date = parseIPTCDate(iptc) {
+            return DateResult(date: date, source: .exif)
+        }
+        if let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+           let date = parseGPSDate(gps) {
+            return DateResult(date: date, source: .exif)
+        }
+        return nil
+    }
+
+    private static func extractCameraModel(from properties: [CFString: Any]) -> String? {
+        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
+           let model = tiff[kCGImagePropertyTIFFModel] as? String {
+            return model.trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
     static func readDate(from url: URL) async -> DateResult? {
         if let result = readImageDate(from: url) {
             return result

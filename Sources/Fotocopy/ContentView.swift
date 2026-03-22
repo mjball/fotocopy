@@ -16,6 +16,8 @@ struct ContentView: View {
     @State private var previewTask: Task<Void, Never>?
     @State private var previewResult: PreviewResult?
     @State private var isPreviewing = false
+    @State private var scanScanned = 0
+    @State private var scanTotal = 0
     @State private var showingSettings = false
     @State private var dateFrom: Date?
     @State private var dateTo: Date?
@@ -182,19 +184,37 @@ struct ContentView: View {
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isPreviewing {
-                HStack(spacing: 12) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Scanning...")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Cancel") {
-                        previewTask?.cancel()
-                        previewTask = nil
-                        isPreviewing = false
-                        previewResult = nil
+                VStack(alignment: .leading, spacing: 6) {
+                    if scanTotal > 0 {
+                        ProgressView(value: Double(scanScanned), total: Double(scanTotal)) {
+                            HStack {
+                                Text("Scanning \(scanScanned) / \(scanTotal) files")
+                                Spacer()
+                                Text("\(Int(Double(scanScanned) / Double(scanTotal) * 100))%")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Discovering files...")
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .controlSize(.small)
+                    HStack {
+                        Spacer()
+                        Button("Cancel") {
+                            previewTask?.cancel()
+                            previewTask = nil
+                            isPreviewing = false
+                            previewResult = nil
+                            scanScanned = 0
+                            scanTotal = 0
+                        }
+                        .controlSize(.small)
+                    }
                 }
             } else if let preview = previewResult {
                 let counts = preview.filteredCounts(by: activeFilter)
@@ -564,6 +584,8 @@ struct ContentView: View {
         guard !progress.isImporting, !progress.isComplete else { return }
 
         isPreviewing = true
+        scanScanned = 0
+        scanTotal = 0
         let src = URL(fileURLWithPath: sourcePath)
         let dst = URL(fileURLWithPath: destinationPath)
 
@@ -575,7 +597,13 @@ struct ContentView: View {
             do {
                 try await checker.buildIndex(at: dst)
                 let result = try await engine.previewImport(
-                    source: src, duplicateChecker: checker, resolver: resolver
+                    source: src, duplicateChecker: checker, resolver: resolver,
+                    onProgress: { scanned, total in
+                        Task { @MainActor in
+                            scanScanned = scanned
+                            scanTotal = total
+                        }
+                    }
                 )
                 if !Task.isCancelled {
                     previewResult = result
@@ -583,6 +611,8 @@ struct ContentView: View {
             } catch {}
 
             isPreviewing = false
+            scanScanned = 0
+            scanTotal = 0
         }
     }
 

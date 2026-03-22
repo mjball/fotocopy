@@ -90,6 +90,38 @@ struct EXIFDateReaderTests {
         #expect(hour == 10)
     }
 
+    @Test func readMetadataCombined() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let file = dir.appendingPathComponent("combined.jpg")
+        try createMinimalJPEGWithEXIF(at: file, exif: [
+            kCGImagePropertyExifDateTimeOriginal: "2024:06:15 14:30:00"
+        ], tiff: [
+            kCGImagePropertyTIFFModel: "Canon EOS R6"
+        ])
+
+        let metadata = await EXIFDateReader.readMetadata(from: file)
+        #expect(metadata.dateResult != nil)
+        #expect(metadata.dateResult?.source == .exif)
+        #expect(metadata.cameraModel == "Canon EOS R6")
+
+        let cal = Calendar.current
+        #expect(cal.component(.year, from: metadata.dateResult!.date) == 2024)
+    }
+
+    @Test func readMetadataFallsBackToFilesystem() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let file = dir.appendingPathComponent("plain.txt")
+        try Data("hello".utf8).write(to: file)
+
+        let metadata = await EXIFDateReader.readMetadata(from: file)
+        #expect(metadata.dateResult?.source == .filesystem)
+        #expect(metadata.cameraModel == nil)
+    }
+
     @Test func fallsBackToDigitizedDate() async throws {
         let dir = try makeTempDir()
         defer { cleanup(dir) }

@@ -94,35 +94,65 @@ actor ImportEngine {
     func previewImport(
         source: URL,
         duplicateChecker: DuplicateChecker,
-        resolver: PhotosLibraryResolver? = nil
+        resolver: PhotosLibraryResolver? = nil,
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> PreviewResult {
         let urls = try discoverFiles(in: source)
         let fm = FileManager.default
-        var previewFiles: [PreviewFile] = []
+        let total = urls.count
+        let maxConcurrency = 8
 
-        for fileURL in urls {
-            if Task.isCancelled { break }
-            let rawFilename = fileURL.lastPathComponent
-            let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
-            let ext = (filename as NSString).pathExtension.lowercased()
+        let previewFiles: [PreviewFile] = await withTaskGroup(of: PreviewFile?.self) { group in
+            var results: [PreviewFile] = []
+            var running = 0
+            var scanned = 0
 
-            guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
-                  let fileSize = attrs[.size] as? Int else { continue }
+            for fileURL in urls {
+                if Task.isCancelled { break }
 
-            let isDuplicate = await duplicateChecker.isDuplicate(filename: filename, size: fileSize)
-            let dateResult = await EXIFDateReader.readDate(from: fileURL)
-            let cameraModel = EXIFDateReader.readCameraModel(from: fileURL)
+                if running >= maxConcurrency {
+                    if let file = await group.next() ?? nil {
+                        results.append(file)
+                    }
+                    running -= 1
+                    scanned += 1
+                    onProgress?(scanned, total)
+                }
 
-            previewFiles.append(PreviewFile(
-                url: fileURL,
-                filename: filename,
-                ext: ext,
-                size: fileSize,
-                date: dateResult?.date,
-                dateSource: dateResult?.source,
-                cameraModel: cameraModel,
-                isDuplicate: isDuplicate
-            ))
+                group.addTask {
+                    let rawFilename = fileURL.lastPathComponent
+                    let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
+                    let ext = (filename as NSString).pathExtension.lowercased()
+
+                    guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
+                          let fileSize = attrs[.size] as? Int else { return nil }
+
+                    let isDuplicate = await duplicateChecker.isDuplicate(filename: filename, size: fileSize)
+                    let metadata = await EXIFDateReader.readMetadata(from: fileURL)
+
+                    return PreviewFile(
+                        url: fileURL,
+                        filename: filename,
+                        ext: ext,
+                        size: fileSize,
+                        date: metadata.dateResult?.date,
+                        dateSource: metadata.dateResult?.source,
+                        cameraModel: metadata.cameraModel,
+                        isDuplicate: isDuplicate
+                    )
+                }
+                running += 1
+            }
+
+            for await file in group {
+                if let file {
+                    results.append(file)
+                }
+                scanned += 1
+                onProgress?(scanned, total)
+            }
+
+            return results
         }
 
         return PreviewResult(files: previewFiles)
