@@ -146,33 +146,33 @@ struct ContentView: View {
     // MARK: - Action section
 
     private var actionSection: some View {
-        VStack(spacing: 4) {
-            HStack {
-                if vm.progress.isImporting {
-                    Button("Cancel") { vm.cancelImport() }
-                        .tint(.red)
-                } else {
-                    Button("Import") {
-                        if let spaceError = vm.checkDiskSpace() {
-                            let alert = NSAlert()
-                            alert.messageText = "Not enough disk space"
-                            alert.informativeText = spaceError
-                            alert.alertStyle = .warning
-                            alert.addButton(withTitle: "OK")
-                            alert.runModal()
-                            return
-                        }
-                        vm.startImport()
+        HStack {
+            if vm.progress.isImporting {
+                Button("Cancel") { vm.cancelImport() }
+                    .tint(.red)
+            } else {
+                Button("Import") {
+                    if let spaceError = vm.checkDiskSpace() {
+                        let alert = NSAlert()
+                        alert.messageText = "Not enough disk space"
+                        alert.informativeText = spaceError
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                        return
                     }
-                    .disabled(vm.isImportDisabled)
-                    .keyboardShortcut(.return, modifiers: .command)
+                    vm.startImport()
                 }
+                .disabled(vm.isImportDisabled)
+                .keyboardShortcut(.return, modifiers: .command)
+                .controlSize(.large)
             }
             if let reason = vm.importDisabledReason, !vm.progress.isImporting, !vm.progress.isComplete {
                 Text(reason)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Spacer()
         }
     }
 

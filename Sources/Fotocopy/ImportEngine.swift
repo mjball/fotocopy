@@ -147,7 +147,7 @@ actor ImportEngine {
         let urls = try discoverFiles(in: source)
         let fm = FileManager.default
         let total = urls.count
-        let maxConcurrency = 8
+        let maxConcurrency = 16
 
         return await withTaskGroup(of: SourceFile?.self) { group in
             var results: [SourceFile] = []
@@ -236,7 +236,7 @@ actor ImportEngine {
         progress: ImportProgress
     ) async throws {
         let fm = FileManager.default
-        let maxConcurrency = 6
+        let maxConcurrency = 8
 
         await withThrowingTaskGroup(of: Void.self) { group in
             var running = 0
