@@ -31,7 +31,22 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$PROJECT_DIR/.build/release/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/"
 cp "$PROJECT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/"
-cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || echo "Warning: No AppIcon.icns found, skipping icon"
+
+ICON_PNG="$PROJECT_DIR/Resources/AppIcon.png"
+if [ -f "$ICON_PNG" ]; then
+    echo "Generating app icon..."
+    ICONSET=$(mktemp -d)/AppIcon.iconset
+    mkdir -p "$ICONSET"
+    for SIZE in 16 32 128 256 512; do
+        sips -z $SIZE $SIZE "$ICON_PNG" --out "$ICONSET/icon_${SIZE}x${SIZE}.png" > /dev/null 2>&1
+        DOUBLE=$((SIZE * 2))
+        sips -z $DOUBLE $DOUBLE "$ICON_PNG" --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png" > /dev/null 2>&1
+    done
+    iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+    rm -rf "$(dirname "$ICONSET")"
+else
+    cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || echo "Warning: No icon found, skipping"
+fi
 
 if [ -n "$VERSION_NUMBER" ]; then
     echo "Stamping version $VERSION_NUMBER into app bundle..."
