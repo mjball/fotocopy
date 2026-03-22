@@ -4,7 +4,8 @@ struct ContentView: View {
     @AppStorage(PreferenceKeys.sourcePath) private var sourcePath = ""
     @AppStorage(PreferenceKeys.destinationPath) private var destinationPath = ""
     @AppStorage(PreferenceKeys.transferMode) private var transferMode = TransferMode.copy.rawValue
-    @AppStorage(PreferenceKeys.autoOpenVolume) private var autoOpenVolume = ""
+    @AppStorage(PreferenceKeys.autoOpenSource) private var autoOpenSource = false
+    @AppStorage(PreferenceKeys.autoOpenDestination) private var autoOpenDestination = false
     @AppStorage(PreferenceKeys.ejectSource) private var ejectSource = false
     @AppStorage(PreferenceKeys.ejectDestination) private var ejectDestination = false
     @AppStorage(PreferenceKeys.excludedExtensions) private var excludedExtensionsRaw = ""
@@ -12,7 +13,6 @@ struct ContentView: View {
 
     @State private var vm = ImportViewModel()
     @State private var volumeWatcher = VolumeWatcher()
-    @State private var showingSettings = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -31,24 +31,20 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 480)
-        .sheet(isPresented: $showingSettings) {
-            settingsSheet
-        }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button(action: { showingSettings = true }) {
-                    Image(systemName: "gear")
-                }
-            }
-        }
-        .onChange(of: sourcePath) { _, _ in syncAndPreview() }
-        .onChange(of: destinationPath) { _, _ in syncAndPreview() }
+        .onChange(of: sourcePath) { _, _ in syncAndPreview(); updateVolumeWatching() }
+        .onChange(of: destinationPath) { _, _ in syncAndPreview(); updateVolumeWatching() }
+        .onChange(of: autoOpenSource) { _, _ in updateVolumeWatching() }
+        .onChange(of: autoOpenDestination) { _, _ in updateVolumeWatching() }
         .onChange(of: excludedExtensionsRaw) { _, new in vm.excludedExtensionsRaw = new }
         .onChange(of: excludedCameraModelsRaw) { _, new in vm.excludedCameraModelsRaw = new }
         .onChange(of: transferMode) { _, new in vm.transferMode = new }
-        .onChange(of: volumeWatcher.lastMountedVolumePath) { _, newPath in
-            if let newPath {
-                sourcePath = newPath
+        .onChange(of: volumeWatcher.lastMounted?.path) { _, _ in
+            if let mounted = volumeWatcher.lastMounted {
+                if mounted.role == "source" {
+                    sourcePath = mounted.path
+                } else if mounted.role == "destination" {
+                    destinationPath = mounted.path
+                }
                 NSApp.activate(ignoringOtherApps: true)
             }
         }
@@ -58,9 +54,7 @@ struct ContentView: View {
             vm.transferMode = transferMode
             vm.excludedExtensionsRaw = excludedExtensionsRaw
             vm.excludedCameraModelsRaw = excludedCameraModelsRaw
-            if !autoOpenVolume.isEmpty {
-                volumeWatcher.startWatching(volumeName: autoOpenVolume)
-            }
+            updateVolumeWatching()
             vm.runPreview()
         }
         .onDisappear {
@@ -78,38 +72,69 @@ struct ContentView: View {
         vm.runPreview()
     }
 
+    private func updateVolumeWatching() {
+        var volumes: [(name: String, role: String)] = []
+        if autoOpenSource, let name = VolumeWatcher.volumeName(from: sourcePath) {
+            volumes.append((name: name, role: "source"))
+        }
+        if autoOpenDestination, let name = VolumeWatcher.volumeName(from: destinationPath) {
+            volumes.append((name: name, role: "destination"))
+        }
+        volumeWatcher.startWatching(volumes: volumes)
+    }
+
     // MARK: - Path section
 
     private var pathSection: some View {
-        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 10) {
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
             GridRow {
                 Text("Source:")
                     .frame(width: 80, alignment: .trailing)
-                HStack {
-                    Text(sourcePath.isEmpty ? "Select source folder..." : sourcePath)
-                        .truncationMode(.head)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.quaternary)
-                        .cornerRadius(4)
-                    Button("Browse") { pickFolder(for: \.sourcePath) }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(sourcePath.isEmpty ? "Select source folder..." : sourcePath)
+                            .truncationMode(.head)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary)
+                            .cornerRadius(4)
+                        Button("Browse") { pickFolder(for: \.sourcePath) }
+                    }
+                    if !sourcePath.isEmpty {
+                        HStack(spacing: 12) {
+                            Toggle("Auto-open", isOn: $autoOpenSource)
+                            Toggle("Eject after import", isOn: $ejectSource)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
             GridRow {
                 Text("Destination:")
                     .frame(width: 80, alignment: .trailing)
-                HStack {
-                    Text(destinationPath.isEmpty ? "Select destination folder..." : destinationPath)
-                        .truncationMode(.head)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.quaternary)
-                        .cornerRadius(4)
-                    Button("Browse") { pickFolder(for: \.destinationPath) }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(destinationPath.isEmpty ? "Select destination folder..." : destinationPath)
+                            .truncationMode(.head)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary)
+                            .cornerRadius(4)
+                        Button("Browse") { pickFolder(for: \.destinationPath) }
+                    }
+                    if !destinationPath.isEmpty {
+                        HStack(spacing: 12) {
+                            Toggle("Auto-open", isOn: $autoOpenDestination)
+                            Toggle("Eject after import", isOn: $ejectDestination)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -472,51 +497,6 @@ struct ContentView: View {
         .padding(12)
         .background(.quaternary.opacity(0.5))
         .cornerRadius(8)
-    }
-
-    // MARK: - Settings sheet
-
-    private var settingsSheet: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Settings")
-                .font(.title3)
-                .fontWeight(.semibold)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Auto-open when volume mounts:")
-                    .font(.callout)
-                TextField("Volume name (e.g. SD_CARD)", text: $autoOpenVolume)
-                    .textFieldStyle(.roundedBorder)
-                Text("Leave empty to disable")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("After import:")
-                    .font(.callout)
-                Toggle("Eject source volume", isOn: $ejectSource)
-                Toggle("Eject destination volume", isOn: $ejectDestination)
-            }
-            .font(.callout)
-
-            HStack {
-                Spacer()
-                Button("Done") {
-                    showingSettings = false
-                    if !autoOpenVolume.isEmpty {
-                        volumeWatcher.startWatching(volumeName: autoOpenVolume)
-                    } else {
-                        volumeWatcher.stopWatching()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 350)
     }
 
     // MARK: - Helpers

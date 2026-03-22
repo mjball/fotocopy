@@ -4,13 +4,24 @@ import AppKit
 @Observable
 @MainActor
 final class VolumeWatcher {
-    var lastMountedVolumePath: String?
+    var lastMounted: (path: String, role: String)?
 
     private var observer: NSObjectProtocol?
 
-    func startWatching(volumeName: String) {
+    static func volumeName(from path: String) -> String? {
+        var current = URL(fileURLWithPath: path)
+        while current.path != "/" {
+            if current.deletingLastPathComponent().path == "/Volumes" {
+                return current.lastPathComponent
+            }
+            current = current.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    func startWatching(volumes: [(name: String, role: String)]) {
         stopWatching()
-        guard !volumeName.isEmpty else { return }
+        guard !volumes.isEmpty else { return }
 
         observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didMountNotification,
@@ -20,9 +31,12 @@ final class VolumeWatcher {
             guard let self,
                   let path = notification.userInfo?["NSDevicePath"] as? String else { return }
             let mounted = URL(fileURLWithPath: path).lastPathComponent
-            if mounted.localizedCaseInsensitiveCompare(volumeName) == .orderedSame {
-                Task { @MainActor in
-                    self.lastMountedVolumePath = path
+            for volume in volumes {
+                if mounted.localizedCaseInsensitiveCompare(volume.name) == .orderedSame {
+                    Task { @MainActor in
+                        self.lastMounted = (path: path, role: volume.role)
+                    }
+                    break
                 }
             }
         }
