@@ -18,14 +18,15 @@ struct ContentView: View {
         VStack(spacing: 16) {
             pathSection
             modeSection
-            if vm.isPreviewing || vm.previewResult != nil || vm.previewError != nil {
-                previewSection
-            }
-            actionSection
-            if vm.progress.isScanning || vm.progress.isImporting {
-                progressSection
-            }
-            if vm.progress.isComplete {
+            if !vm.progress.isComplete {
+                if vm.isPreviewing || vm.previewResult != nil || vm.previewError != nil {
+                    previewSection
+                }
+                actionSection
+                if vm.progress.isScanning || vm.progress.isImporting {
+                    progressSection
+                }
+            } else {
                 completeSection
             }
         }
@@ -433,31 +434,22 @@ struct ContentView: View {
     // MARK: - Complete section
 
     private var completeSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Import Complete")
-                .font(.headline)
+        let imported = vm.progress.processedFiles - vm.progress.duplicatesSkipped - vm.progress.errors.count
 
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-                GridRow {
-                    Text("Files imported:")
+        return VStack(alignment: .leading, spacing: 12) {
+            Label("Import Complete", systemImage: "checkmark.circle.fill")
+                .font(.headline)
+                .foregroundStyle(.green)
+
+            HStack(spacing: 16) {
+                Text("\(imported) files imported")
+                if vm.progress.duplicatesSkipped > 0 {
+                    Text("\(vm.progress.duplicatesSkipped) duplicates skipped")
                         .foregroundStyle(.secondary)
-                    Text("\(vm.progress.processedFiles - vm.progress.duplicatesSkipped - vm.progress.errors.count)")
-                        .fontWeight(.medium)
-                }
-                GridRow {
-                    Text("Duplicates skipped:")
-                        .foregroundStyle(.secondary)
-                    Text("\(vm.progress.duplicatesSkipped)")
-                        .fontWeight(.medium)
                 }
                 if !vm.progress.errors.isEmpty {
-                    GridRow {
-                        Text("Errors:")
-                            .foregroundStyle(.secondary)
-                        Text("\(vm.progress.errors.count)")
-                            .fontWeight(.medium)
-                            .foregroundStyle(.red)
-                    }
+                    Text("\(vm.progress.errors.count) errors")
+                        .foregroundStyle(.red)
                 }
             }
             .font(.callout)
@@ -469,7 +461,6 @@ struct ContentView: View {
             }
 
             if !vm.progress.errors.isEmpty {
-                Divider()
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Errors", systemImage: "xmark.circle")
                         .foregroundStyle(.red)
@@ -494,18 +485,16 @@ struct ContentView: View {
             }
 
             HStack {
+                Button("Done") { vm.resetAndPreview() }
+                    .controlSize(.large)
                 if ejectSource || ejectDestination {
                     Button("Eject & Quit") {
                         ejectAndQuit()
                     }
-                    .keyboardShortcut(.return, modifiers: .command)
                 }
-                Button("Done") { vm.resetAndPreview() }
             }
         }
-        .padding(12)
-        .background(.quaternary.opacity(0.5))
-        .cornerRadius(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Helpers
