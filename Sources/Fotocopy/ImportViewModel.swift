@@ -235,6 +235,7 @@ final class ImportViewModel {
                 }
 
                 progress.totalFiles = filesToImport.count
+                progress.totalBytesToImport = filesToImport.reduce(0) { $0 + $1.size }
                 progress.isImporting = true
 
                 try await engine.importFiles(

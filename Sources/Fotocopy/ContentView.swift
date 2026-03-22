@@ -388,10 +388,19 @@ struct ContentView: View {
                     HStack {
                         Text("\(vm.progress.processedFiles) / \(vm.progress.totalFiles) files")
                         Spacer()
+                        if let throughput = vm.progress.formattedThroughput {
+                            Text(throughput)
+                        }
                         Text("\(Int(vm.progress.fraction * 100))%")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                }
+
+                if let eta = vm.progress.formattedETA {
+                    Text(eta)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 16) {

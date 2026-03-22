@@ -339,6 +339,7 @@ actor ImportEngine {
         }
 
         await MainActor.run {
+            progress.recordCompletion(bytes: file.size)
             progress.processedFiles += 1
         }
     }
