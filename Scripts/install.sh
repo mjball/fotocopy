@@ -34,4 +34,4 @@ mv "$TMPDIR/$APP_NAME.app" "$INSTALL_DIR/"
 
 echo ""
 echo "Done! $APP_NAME is installed at $INSTALL_DIR/$APP_NAME.app"
-echo "You can open it from Spotlight or run: open -a $APP_NAME"
+open -a "$APP_NAME"
