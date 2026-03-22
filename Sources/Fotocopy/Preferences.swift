@@ -26,7 +26,9 @@ struct ImportFilter: Sendable {
         if excludedExtensions.contains(file.ext) { return false }
         if let model = file.cameraModel, excludedCameraModels.contains(model) { return false }
         if let from = dateFrom, let date = file.date, date < from { return false }
-        if let to = dateTo, let date = file.date, date > Calendar.current.date(byAdding: .day, value: 1, to: to)! { return false }
+        if let to = dateTo, let date = file.date,
+           let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: to),
+           date > endOfDay { return false }
         return true
     }
 }

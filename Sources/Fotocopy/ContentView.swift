@@ -10,56 +10,22 @@ struct ContentView: View {
     @AppStorage(PreferenceKeys.excludedExtensions) private var excludedExtensionsRaw = ""
     @AppStorage(PreferenceKeys.excludedCameraModels) private var excludedCameraModelsRaw = ""
 
-    @State private var progress = ImportProgress()
+    @State private var vm = ImportViewModel()
     @State private var volumeWatcher = VolumeWatcher()
-    @State private var importTask: Task<Void, Never>?
-    @State private var previewTask: Task<Void, Never>?
-    @State private var previewResult: PreviewResult?
-    @State private var isPreviewing = false
-    @State private var scanScanned = 0
-    @State private var scanTotal = 0
     @State private var showingSettings = false
-    @State private var dateFrom: Date?
-    @State private var dateTo: Date?
-    @State private var showDateFilter = false
-
-    private var isPhotosLibrarySource: Bool {
-        PhotosLibraryResolver.findPhotosLibraryRoot(from: URL(fileURLWithPath: sourcePath)) != nil
-    }
-
-    private var excludedExtensions: Set<String> {
-        Set(excludedExtensionsRaw.split(separator: ",").map { String($0) })
-    }
-
-    private var excludedCameraModels: Set<String> {
-        Set(excludedCameraModelsRaw.split(separator: ",").map { String($0) })
-    }
-
-    private var activeFilter: ImportFilter {
-        ImportFilter(
-            excludedExtensions: excludedExtensions,
-            excludedCameraModels: excludedCameraModels,
-            dateFrom: dateFrom,
-            dateTo: dateTo
-        )
-    }
-
-    private var filteredNewCount: Int {
-        previewResult?.filteredCounts(by: activeFilter).new ?? 0
-    }
 
     var body: some View {
         VStack(spacing: 16) {
             pathSection
             modeSection
-            if isPreviewing || previewResult != nil {
+            if vm.isPreviewing || vm.previewResult != nil || vm.previewError != nil {
                 previewSection
             }
             actionSection
-            if progress.isScanning || progress.isImporting {
+            if vm.progress.isScanning || vm.progress.isImporting {
                 progressSection
             }
-            if progress.isComplete {
+            if vm.progress.isComplete {
                 completeSection
             }
         }
@@ -75,8 +41,11 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: sourcePath) { _, _ in runPreview() }
-        .onChange(of: destinationPath) { _, _ in runPreview() }
+        .onChange(of: sourcePath) { _, _ in syncAndPreview() }
+        .onChange(of: destinationPath) { _, _ in syncAndPreview() }
+        .onChange(of: excludedExtensionsRaw) { _, new in vm.excludedExtensionsRaw = new }
+        .onChange(of: excludedCameraModelsRaw) { _, new in vm.excludedCameraModelsRaw = new }
+        .onChange(of: transferMode) { _, new in vm.transferMode = new }
         .onChange(of: volumeWatcher.lastMountedVolumePath) { _, newPath in
             if let newPath {
                 sourcePath = newPath
@@ -84,17 +53,32 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            vm.sourcePath = sourcePath
+            vm.destinationPath = destinationPath
+            vm.transferMode = transferMode
+            vm.excludedExtensionsRaw = excludedExtensionsRaw
+            vm.excludedCameraModelsRaw = excludedCameraModelsRaw
             if !autoOpenVolume.isEmpty {
                 volumeWatcher.startWatching(volumeName: autoOpenVolume)
             }
-            runPreview()
+            vm.runPreview()
         }
         .onDisappear {
             volumeWatcher.stopWatching()
-            importTask?.cancel()
-            previewTask?.cancel()
+            vm.cleanup()
         }
     }
+
+    private func syncAndPreview() {
+        vm.sourcePath = sourcePath
+        vm.destinationPath = destinationPath
+        if vm.isPhotosLibrarySource {
+            transferMode = TransferMode.copy.rawValue
+        }
+        vm.runPreview()
+    }
+
+    // MARK: - Path section
 
     private var pathSection: some View {
         Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 10) {
@@ -131,6 +115,8 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Mode section
+
     private var modeSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -142,10 +128,10 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 240)
-                .disabled(isPhotosLibrarySource)
+                .disabled(vm.isPhotosLibrarySource)
                 Spacer()
             }
-            if isPhotosLibrarySource {
+            if vm.isPhotosLibrarySource {
                 HStack {
                     Spacer()
                         .frame(width: 84)
@@ -155,42 +141,53 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: sourcePath) { _, _ in
-            if isPhotosLibrarySource {
-                transferMode = TransferMode.copy.rawValue
+    }
+
+    // MARK: - Action section
+
+    private var actionSection: some View {
+        VStack(spacing: 4) {
+            HStack {
+                if vm.progress.isImporting {
+                    Button("Cancel") { vm.cancelImport() }
+                        .tint(.red)
+                } else {
+                    Button("Import") {
+                        if let spaceError = vm.checkDiskSpace() {
+                            let alert = NSAlert()
+                            alert.messageText = "Not enough disk space"
+                            alert.informativeText = spaceError
+                            alert.alertStyle = .warning
+                            alert.addButton(withTitle: "OK")
+                            alert.runModal()
+                            return
+                        }
+                        vm.startImport()
+                    }
+                    .disabled(vm.isImportDisabled)
+                    .keyboardShortcut(.return, modifiers: .command)
+                }
+            }
+            if let reason = vm.importDisabledReason, !vm.progress.isImporting, !vm.progress.isComplete {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
 
-    private var actionSection: some View {
-        HStack {
-            if progress.isImporting {
-                Button("Cancel") {
-                    importTask?.cancel()
-                    importTask = nil
-                    progress.isImporting = false
-                }
-                .tint(.red)
-            } else {
-                Button("Start Import") {
-                    startImport()
-                }
-                .disabled(sourcePath.isEmpty || destinationPath.isEmpty || isPreviewing || filteredNewCount == 0)
-                .keyboardShortcut(.return, modifiers: .command)
-            }
-        }
-    }
+    // MARK: - Preview section
 
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if isPreviewing {
+            if vm.isPreviewing {
                 VStack(alignment: .leading, spacing: 6) {
-                    if scanTotal > 0 {
-                        ProgressView(value: Double(scanScanned), total: Double(scanTotal)) {
+                    if vm.scanTotal > 0 {
+                        ProgressView(value: Double(vm.scanScanned), total: Double(vm.scanTotal)) {
                             HStack {
-                                Text("Scanning \(scanScanned) / \(scanTotal) files")
+                                Text("Scanning \(vm.scanScanned) / \(vm.scanTotal) files")
                                 Spacer()
-                                Text("\(Int(Double(scanScanned) / Double(scanTotal) * 100))%")
+                                Text("\(Int(Double(vm.scanScanned) / Double(vm.scanTotal) * 100))%")
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -205,19 +202,16 @@ struct ContentView: View {
                     }
                     HStack {
                         Spacer()
-                        Button("Cancel") {
-                            previewTask?.cancel()
-                            previewTask = nil
-                            isPreviewing = false
-                            previewResult = nil
-                            scanScanned = 0
-                            scanTotal = 0
-                        }
-                        .controlSize(.small)
+                        Button("Cancel") { vm.cancelPreview() }
+                            .controlSize(.small)
                     }
                 }
-            } else if let preview = previewResult {
-                let counts = preview.filteredCounts(by: activeFilter)
+            } else if let error = vm.previewError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if let preview = vm.previewResult {
+                let counts = vm.filteredCounts
 
                 HStack {
                     Label("\(counts.total) files", systemImage: "photo.on.rectangle")
@@ -248,27 +242,13 @@ struct ContentView: View {
     }
 
     private func extensionChips(preview: PreviewResult) -> some View {
-        let counts = preview.extensionCounts
-        let sortedExts = counts.sorted { $0.value > $1.value }
+        let sortedExts = preview.extensionCounts.sorted { $0.value > $1.value }
 
         return FlowLayout(spacing: 6) {
             ForEach(sortedExts, id: \.key) { ext, count in
-                let isExcluded = excludedExtensions.contains(ext)
-                Button {
-                    toggleExtension(ext)
-                } label: {
-                    Text("\(ext.uppercased()) \(count)")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(isExcluded ? .clear : Color.accentColor.opacity(0.15))
-                        .foregroundStyle(isExcluded ? .secondary : .primary)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(isExcluded ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4), lineWidth: 1)
-                        )
-                        .cornerRadius(12)
+                let isExcluded = vm.excludedExtensions.contains(ext)
+                Button { vm.toggleExtension(ext) } label: {
+                    chipLabel(text: "\(ext.uppercased()) \(count)", isExcluded: isExcluded)
                 }
                 .buttonStyle(.plain)
             }
@@ -276,35 +256,38 @@ struct ContentView: View {
     }
 
     private func cameraModelChips(preview: PreviewResult) -> some View {
-        let counts = preview.cameraModelCounts
-        let sorted = counts.sorted { $0.value > $1.value }
+        let sorted = preview.cameraModelCounts.sorted { $0.value > $1.value }
 
         return FlowLayout(spacing: 6) {
             ForEach(sorted, id: \.key) { model, count in
-                let isExcluded = excludedCameraModels.contains(model)
-                Button {
-                    toggleCameraModel(model)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "camera")
-                            .font(.caption2)
-                        Text("\(model) \(count)")
-                    }
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(isExcluded ? .clear : Color.accentColor.opacity(0.15))
-                    .foregroundStyle(isExcluded ? .secondary : .primary)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(isExcluded ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4), lineWidth: 1)
-                    )
-                    .cornerRadius(12)
+                let isExcluded = vm.excludedCameraModels.contains(model)
+                Button { vm.toggleCameraModel(model) } label: {
+                    chipLabel(text: "\(model) \(count)", isExcluded: isExcluded, icon: "camera")
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private func chipLabel(text: String, isExcluded: Bool, icon: String? = nil) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.caption2)
+            }
+            Text(text)
+        }
+        .font(.caption)
+        .fontWeight(.medium)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(isExcluded ? .clear : Color.accentColor.opacity(0.15))
+        .foregroundStyle(isExcluded ? .secondary : .primary)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isExcluded ? Color.secondary.opacity(0.3) : Color.accentColor.opacity(0.4), lineWidth: 1)
+        )
+        .cornerRadius(12)
     }
 
     private func dateRangeRow(range: (min: Date, max: Date)) -> some View {
@@ -317,31 +300,31 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if dateFrom != nil || dateTo != nil {
+                if vm.dateFrom != nil || vm.dateTo != nil {
                     Button("Clear") {
-                        dateFrom = nil
-                        dateTo = nil
-                        showDateFilter = false
+                        vm.dateFrom = nil
+                        vm.dateTo = nil
+                        vm.showDateFilter = false
                     }
                     .font(.caption)
                     .controlSize(.small)
                 }
-                Button(showDateFilter ? "Hide" : "Filter") {
-                    showDateFilter.toggle()
+                Button(vm.showDateFilter ? "Hide" : "Filter") {
+                    vm.showDateFilter.toggle()
                 }
                 .font(.caption)
                 .controlSize(.small)
             }
 
-            if showDateFilter {
+            if vm.showDateFilter {
                 HStack(spacing: 12) {
                     HStack(spacing: 4) {
                         Text("From:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         DatePicker("", selection: Binding(
-                            get: { dateFrom ?? range.min },
-                            set: { dateFrom = $0 }
+                            get: { vm.dateFrom ?? range.min },
+                            set: { vm.dateFrom = $0 }
                         ), in: range.min...range.max, displayedComponents: .date)
                         .datePickerStyle(.compact)
                         .labelsHidden()
@@ -352,8 +335,8 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         DatePicker("", selection: Binding(
-                            get: { dateTo ?? range.max },
-                            set: { dateTo = $0 }
+                            get: { vm.dateTo ?? range.max },
+                            set: { vm.dateTo = $0 }
                         ), in: range.min...range.max, displayedComponents: .date)
                         .datePickerStyle(.compact)
                         .labelsHidden()
@@ -364,9 +347,11 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Progress section
+
     private var progressSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if progress.isScanning {
+            if vm.progress.isScanning {
                 HStack {
                     ProgressView()
                         .controlSize(.small)
@@ -374,31 +359,31 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                ProgressView(value: progress.fraction) {
+                ProgressView(value: vm.progress.fraction) {
                     HStack {
-                        Text("\(progress.processedFiles) / \(progress.totalFiles) files")
+                        Text("\(vm.progress.processedFiles) / \(vm.progress.totalFiles) files")
                         Spacer()
-                        Text("\(Int(progress.fraction * 100))%")
+                        Text("\(Int(vm.progress.fraction * 100))%")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 16) {
-                    if progress.duplicatesSkipped > 0 {
-                        Label("\(progress.duplicatesSkipped) duplicates skipped", systemImage: "doc.on.doc")
+                    if vm.progress.duplicatesSkipped > 0 {
+                        Label("\(vm.progress.duplicatesSkipped) duplicates skipped", systemImage: "doc.on.doc")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    if !progress.fallbackDateFiles.isEmpty {
-                        Label("\(progress.fallbackDateFiles.count) used fallback date", systemImage: "exclamationmark.triangle")
+                    if !vm.progress.fallbackDateFiles.isEmpty {
+                        Label("\(vm.progress.fallbackDateFiles.count) used fallback date", systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
                 }
 
-                if !progress.currentFile.isEmpty {
-                    Text(progress.currentFile)
+                if !vm.progress.currentFile.isEmpty {
+                    Text(vm.progress.currentFile)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -411,6 +396,8 @@ struct ContentView: View {
         .cornerRadius(8)
     }
 
+    // MARK: - Complete section
+
     private var completeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Import Complete")
@@ -420,20 +407,20 @@ struct ContentView: View {
                 GridRow {
                     Text("Files imported:")
                         .foregroundStyle(.secondary)
-                    Text("\(progress.processedFiles - progress.duplicatesSkipped - progress.errors.count)")
+                    Text("\(vm.progress.processedFiles - vm.progress.duplicatesSkipped - vm.progress.errors.count)")
                         .fontWeight(.medium)
                 }
                 GridRow {
                     Text("Duplicates skipped:")
                         .foregroundStyle(.secondary)
-                    Text("\(progress.duplicatesSkipped)")
+                    Text("\(vm.progress.duplicatesSkipped)")
                         .fontWeight(.medium)
                 }
-                if !progress.errors.isEmpty {
+                if !vm.progress.errors.isEmpty {
                     GridRow {
                         Text("Errors:")
                             .foregroundStyle(.secondary)
-                        Text("\(progress.errors.count)")
+                        Text("\(vm.progress.errors.count)")
                             .fontWeight(.medium)
                             .foregroundStyle(.red)
                     }
@@ -441,13 +428,13 @@ struct ContentView: View {
             }
             .font(.callout)
 
-            if !progress.fallbackDateFiles.isEmpty {
-                Label("\(progress.fallbackDateFiles.count) file(s) used filesystem date", systemImage: "exclamationmark.triangle")
+            if !vm.progress.fallbackDateFiles.isEmpty {
+                Label("\(vm.progress.fallbackDateFiles.count) file(s) used filesystem date", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
                     .font(.caption)
             }
 
-            if !progress.errors.isEmpty {
+            if !vm.progress.errors.isEmpty {
                 Divider()
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Errors", systemImage: "xmark.circle")
@@ -455,7 +442,7 @@ struct ContentView: View {
                         .font(.caption)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(progress.errors.enumerated()), id: \.offset) { _, error in
+                            ForEach(Array(vm.progress.errors.enumerated()), id: \.offset) { _, error in
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(error.file)
                                         .font(.caption)
@@ -479,16 +466,15 @@ struct ContentView: View {
                     }
                     .keyboardShortcut(.return, modifiers: .command)
                 }
-                Button("Done") {
-                    progress.reset()
-                    runPreview()
-                }
+                Button("Done") { vm.resetAndPreview() }
             }
         }
         .padding(12)
         .background(.quaternary.opacity(0.5))
         .cornerRadius(8)
     }
+
+    // MARK: - Settings sheet
 
     private var settingsSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -533,6 +519,8 @@ struct ContentView: View {
         .frame(width: 350)
     }
 
+    // MARK: - Helpers
+
     private func pickFolder(for keyPath: ReferenceWritableKeyPath<ContentView, String>) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -549,153 +537,11 @@ struct ContentView: View {
         }
     }
 
-    private func toggleExtension(_ ext: String) {
-        var set = excludedExtensions
-        if set.contains(ext) {
-            set.remove(ext)
-        } else {
-            set.insert(ext)
-        }
-        excludedExtensionsRaw = set.sorted().joined(separator: ",")
-    }
-
-    private func toggleCameraModel(_ model: String) {
-        var set = excludedCameraModels
-        if set.contains(model) {
-            set.remove(model)
-        } else {
-            set.insert(model)
-        }
-        excludedCameraModelsRaw = set.sorted().joined(separator: ",")
-    }
-
     private func formatDateRange(_ min: Date, _ max: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return "\(formatter.string(from: min)) — \(formatter.string(from: max))"
-    }
-
-    private func runPreview() {
-        previewTask?.cancel()
-        previewResult = nil
-
-        guard !sourcePath.isEmpty, !destinationPath.isEmpty else { return }
-        guard !progress.isImporting, !progress.isComplete else { return }
-
-        isPreviewing = true
-        scanScanned = 0
-        scanTotal = 0
-        let src = URL(fileURLWithPath: sourcePath)
-        let dst = URL(fileURLWithPath: destinationPath)
-
-        previewTask = Task {
-            let engine = ImportEngine()
-            let checker = DuplicateChecker()
-            let resolver = PhotosLibraryResolver.resolve(for: src)
-
-            do {
-                try await checker.buildIndex(at: dst)
-                let result = try await engine.previewImport(
-                    source: src, duplicateChecker: checker, resolver: resolver,
-                    onProgress: { scanned, total in
-                        Task { @MainActor in
-                            scanScanned = scanned
-                            scanTotal = total
-                        }
-                    }
-                )
-                if !Task.isCancelled {
-                    previewResult = result
-                }
-            } catch {}
-
-            isPreviewing = false
-            scanScanned = 0
-            scanTotal = 0
-        }
-    }
-
-    private func startImport() {
-        let dst = URL(fileURLWithPath: destinationPath)
-        let filter = activeFilter
-
-        if let cachedPreview = previewResult {
-            let filesToCopy = cachedPreview.filtered(by: filter).filter { !$0.isDuplicate }
-            let requiredBytes = filesToCopy.reduce(0) { $0 + $1.size }
-            if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: dst.path),
-               let freeBytes = attrs[.systemFreeSize] as? Int,
-               requiredBytes > freeBytes {
-                let needed = ByteCountFormatter.string(fromByteCount: Int64(requiredBytes), countStyle: .file)
-                let available = ByteCountFormatter.string(fromByteCount: Int64(freeBytes), countStyle: .file)
-                let alert = NSAlert()
-                alert.messageText = "Not enough disk space"
-                alert.informativeText = "Import needs \(needed) but only \(available) is available on the destination."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
-                return
-            }
-        }
-
-        progress.reset()
-
-        let mode = TransferMode(rawValue: transferMode) ?? .copy
-        let cachedPreview = previewResult
-
-        previewTask?.cancel()
-        previewResult = nil
-        isPreviewing = false
-        dateFrom = nil
-        dateTo = nil
-        showDateFilter = false
-
-        importTask = Task {
-            let engine = ImportEngine()
-            let checker = DuplicateChecker()
-
-            do {
-                try await checker.buildIndex(at: dst)
-
-                let filesToImport: [PreviewFile]
-
-                if let cachedPreview {
-                    filesToImport = cachedPreview.filtered(by: filter)
-                } else {
-                    let src = URL(fileURLWithPath: sourcePath)
-                    let resolver = PhotosLibraryResolver.resolve(for: src)
-                    let preview = try await engine.previewImport(
-                        source: src, duplicateChecker: checker, resolver: resolver
-                    )
-                    filesToImport = preview.filtered(by: filter)
-                }
-
-                await MainActor.run {
-                    progress.totalFiles = filesToImport.count
-                    progress.isImporting = true
-                }
-
-                try await engine.importFiles(
-                    files: filesToImport,
-                    destination: dst,
-                    mode: mode,
-                    duplicateChecker: checker,
-                    progress: progress
-                )
-            } catch {
-                if !Task.isCancelled {
-                    await MainActor.run {
-                        progress.errors.append((file: "Import", message: error.localizedDescription))
-                    }
-                }
-            }
-
-            await MainActor.run {
-                progress.isImporting = false
-                progress.isComplete = true
-                importTask = nil
-            }
-        }
     }
 
     private func ejectAndQuit() {
@@ -716,8 +562,7 @@ struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        return result.size
+        arrange(proposal: proposal, subviews: subviews).size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

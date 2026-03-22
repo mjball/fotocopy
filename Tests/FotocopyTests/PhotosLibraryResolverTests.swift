@@ -75,34 +75,4 @@ struct PhotosLibraryResolverTests {
         #expect(resolver.originalFilename(for: "UNKNOWN-UUID.cr3") == "UNKNOWN-UUID.cr3")
     }
 
-    private func createMockPhotosDB(at path: String, entries: [(String, String)]) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
-            throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not open db"])
-        }
-        defer { sqlite3_close(db) }
-
-        let createTables = """
-            CREATE TABLE ZASSET (
-                Z_PK INTEGER PRIMARY KEY,
-                ZFILENAME VARCHAR
-            );
-            CREATE TABLE ZADDITIONALASSETATTRIBUTES (
-                Z_PK INTEGER PRIMARY KEY,
-                ZASSET INTEGER,
-                ZORIGINALFILENAME VARCHAR
-            );
-            """
-        guard sqlite3_exec(db, createTables, nil, nil, nil) == SQLITE_OK else {
-            throw NSError(domain: "test", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not create tables"])
-        }
-
-        for (i, entry) in entries.enumerated() {
-            let pk = i + 1
-            let insertAsset = "INSERT INTO ZASSET (Z_PK, ZFILENAME) VALUES (\(pk), '\(entry.0)');"
-            let insertAttr = "INSERT INTO ZADDITIONALASSETATTRIBUTES (Z_PK, ZASSET, ZORIGINALFILENAME) VALUES (\(pk), \(pk), '\(entry.1)');"
-            sqlite3_exec(db, insertAsset, nil, nil, nil)
-            sqlite3_exec(db, insertAttr, nil, nil, nil)
-        }
-    }
 }
