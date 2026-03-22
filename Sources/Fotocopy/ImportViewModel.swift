@@ -22,6 +22,7 @@ final class ImportViewModel {
     let progress = ImportProgress()
     private var importTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
+    private var sourceScanCache: SourceScanCache?
 
     var excludedExtensions: Set<String> {
         Set(excludedExtensionsRaw.split(separator: ",").map { String($0) })
@@ -105,6 +106,10 @@ final class ImportViewModel {
         scanTotal = 0
     }
 
+    func invalidateSourceCache() {
+        sourceScanCache = nil
+    }
+
     func cancelImport() {
         importTask?.cancel()
         importTask = nil
@@ -123,25 +128,46 @@ final class ImportViewModel {
         previewError = nil
         let src = URL(fileURLWithPath: sourcePath)
         let dst = URL(fileURLWithPath: destinationPath)
+        let cachedSource = sourceScanCache
 
         previewTask = Task {
             let engine = ImportEngine()
             let checker = DuplicateChecker()
-            let resolver = PhotosLibraryResolver.resolve(for: src)
 
             do {
                 try await checker.buildIndex(at: dst)
-                let result = try await engine.previewImport(
-                    source: src, duplicateChecker: checker, resolver: resolver,
-                    onProgress: { [weak self] scanned, total in
-                        Task { @MainActor in
-                            self?.scanScanned = scanned
-                            self?.scanTotal = total
+
+                let sourceFiles: [SourceFile]
+
+                if let cachedSource, cachedSource.matches(path: sourcePath) {
+                    sourceFiles = cachedSource.files
+                } else {
+                    let resolver = PhotosLibraryResolver.resolve(for: src)
+                    sourceFiles = try await engine.scanSource(
+                        source: src, resolver: resolver,
+                        onProgress: { [weak self] scanned, total in
+                            Task { @MainActor in
+                                self?.scanScanned = scanned
+                                self?.scanTotal = total
+                            }
+                        }
+                    )
+                    if !Task.isCancelled {
+                        await MainActor.run {
+                            self.sourceScanCache = SourceScanCache(
+                                sourcePath: self.sourcePath,
+                                files: sourceFiles,
+                                timestamp: Date()
+                            )
                         }
                     }
+                }
+
+                let preview = await engine.checkDuplicates(
+                    sourceFiles: sourceFiles, duplicateChecker: checker
                 )
                 if !Task.isCancelled {
-                    previewResult = result
+                    previewResult = preview
                 }
             } catch {
                 if !Task.isCancelled {
@@ -202,7 +228,7 @@ final class ImportViewModel {
                 } else {
                     let src = URL(fileURLWithPath: sourcePath)
                     let resolver = PhotosLibraryResolver.resolve(for: src)
-                    let preview = try await engine.previewImport(
+                    let (_, preview) = try await engine.previewImport(
                         source: src, duplicateChecker: checker, resolver: resolver
                     )
                     filesToImport = preview.filtered(by: filter)

@@ -96,6 +96,32 @@ struct ImportViewModelTests {
         #expect(vm.importDisabledReason == "Waiting for scan")
     }
 
+    // MARK: - Source scan cache
+
+    @Test func cacheMatchesSamePath() {
+        let cache = SourceScanCache(sourcePath: "/source", files: [], timestamp: Date())
+        #expect(cache.matches(path: "/source") == true)
+    }
+
+    @Test func cacheDoesNotMatchDifferentPath() {
+        let cache = SourceScanCache(sourcePath: "/source", files: [], timestamp: Date())
+        #expect(cache.matches(path: "/other") == false)
+    }
+
+    @Test func cacheExpires() {
+        let old = Date().addingTimeInterval(-301)
+        let cache = SourceScanCache(sourcePath: "/source", files: [], timestamp: old)
+        #expect(cache.isValid == false)
+        #expect(cache.matches(path: "/source") == false)
+    }
+
+    @Test func cacheValidWithinTTL() {
+        let recent = Date().addingTimeInterval(-60)
+        let cache = SourceScanCache(sourcePath: "/source", files: [], timestamp: recent)
+        #expect(cache.isValid == true)
+        #expect(cache.matches(path: "/source") == true)
+    }
+
     // MARK: - Filter parsing
 
     @Test func parsesExcludedExtensions() {

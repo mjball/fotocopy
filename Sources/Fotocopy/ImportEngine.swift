@@ -1,6 +1,32 @@
 import Foundation
 import AVFoundation
 
+struct SourceScanCache: Sendable {
+    let sourcePath: String
+    let files: [SourceFile]
+    let timestamp: Date
+
+    private static let maxAge: TimeInterval = 300 // 5 minutes
+
+    var isValid: Bool {
+        Date().timeIntervalSince(timestamp) < Self.maxAge
+    }
+
+    func matches(path: String) -> Bool {
+        sourcePath == path && isValid
+    }
+}
+
+struct SourceFile: Sendable {
+    let url: URL
+    let filename: String
+    let ext: String
+    let size: Int
+    let date: Date?
+    let dateSource: DateSource?
+    let cameraModel: String?
+}
+
 struct PreviewFile: Sendable {
     let url: URL
     let filename: String
@@ -10,6 +36,28 @@ struct PreviewFile: Sendable {
     let dateSource: DateSource?
     let cameraModel: String?
     let isDuplicate: Bool
+
+    init(source: SourceFile, isDuplicate: Bool) {
+        self.url = source.url
+        self.filename = source.filename
+        self.ext = source.ext
+        self.size = source.size
+        self.date = source.date
+        self.dateSource = source.dateSource
+        self.cameraModel = source.cameraModel
+        self.isDuplicate = isDuplicate
+    }
+
+    init(url: URL, filename: String, ext: String, size: Int, date: Date?, dateSource: DateSource?, cameraModel: String?, isDuplicate: Bool) {
+        self.url = url
+        self.filename = filename
+        self.ext = ext
+        self.size = size
+        self.date = date
+        self.dateSource = dateSource
+        self.cameraModel = cameraModel
+        self.isDuplicate = isDuplicate
+    }
 }
 
 struct PreviewResult: Sendable {
@@ -91,19 +139,18 @@ actor ImportEngine {
         return files
     }
 
-    func previewImport(
+    func scanSource(
         source: URL,
-        duplicateChecker: DuplicateChecker,
         resolver: PhotosLibraryResolver? = nil,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
-    ) async throws -> PreviewResult {
+    ) async throws -> [SourceFile] {
         let urls = try discoverFiles(in: source)
         let fm = FileManager.default
         let total = urls.count
         let maxConcurrency = 8
 
-        let previewFiles: [PreviewFile] = await withTaskGroup(of: PreviewFile?.self) { group in
-            var results: [PreviewFile] = []
+        return await withTaskGroup(of: SourceFile?.self) { group in
+            var results: [SourceFile] = []
             var running = 0
             var scanned = 0
 
@@ -127,18 +174,16 @@ actor ImportEngine {
                     guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
                           let fileSize = attrs[.size] as? Int else { return nil }
 
-                    let isDuplicate = await duplicateChecker.isDuplicate(filename: filename, size: fileSize)
                     let metadata = await EXIFDateReader.readMetadata(from: fileURL)
 
-                    return PreviewFile(
+                    return SourceFile(
                         url: fileURL,
                         filename: filename,
                         ext: ext,
                         size: fileSize,
                         date: metadata.dateResult?.date,
                         dateSource: metadata.dateResult?.source,
-                        cameraModel: metadata.cameraModel,
-                        isDuplicate: isDuplicate
+                        cameraModel: metadata.cameraModel
                     )
                 }
                 running += 1
@@ -154,8 +199,33 @@ actor ImportEngine {
 
             return results
         }
+    }
 
+    func checkDuplicates(
+        sourceFiles: [SourceFile],
+        duplicateChecker: DuplicateChecker
+    ) async -> PreviewResult {
+        var previewFiles: [PreviewFile] = []
+        for source in sourceFiles {
+            let isDuplicate = await duplicateChecker.isDuplicate(filename: source.filename, size: source.size)
+            previewFiles.append(PreviewFile(source: source, isDuplicate: isDuplicate))
+        }
         return PreviewResult(files: previewFiles)
+    }
+
+    func previewImport(
+        source: URL,
+        duplicateChecker: DuplicateChecker,
+        resolver: PhotosLibraryResolver? = nil,
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> (sourceFiles: [SourceFile], preview: PreviewResult) {
+        let sourceFiles = try await scanSource(
+            source: source, resolver: resolver, onProgress: onProgress
+        )
+        let preview = await checkDuplicates(
+            sourceFiles: sourceFiles, duplicateChecker: duplicateChecker
+        )
+        return (sourceFiles, preview)
     }
 
     func importFiles(

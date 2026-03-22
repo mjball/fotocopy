@@ -135,7 +135,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -157,7 +157,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -179,7 +179,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -212,7 +212,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -234,7 +234,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview1 = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview1) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress1 = await ImportProgress()
         try await engine.importFiles(
             files: preview1.files, destination: dst, mode: .copy,
@@ -247,7 +247,7 @@ struct ImportEngineTests {
         try Data("different image".utf8).write(to: src.appendingPathComponent("photo.jpg"))
         let checker2 = DuplicateChecker()
         try await checker2.buildIndex(at: dst)
-        let preview2 = try await engine.previewImport(source: src, duplicateChecker: checker2)
+        let (_, preview2) = try await engine.previewImport(source: src, duplicateChecker: checker2)
         let progress2 = await ImportProgress()
         try await engine.importFiles(
             files: preview2.files, destination: dst, mode: .copy,
@@ -273,7 +273,7 @@ struct ImportEngineTests {
             try Data(content.utf8).write(to: src.appendingPathComponent("photo.jpg"))
             let checker = DuplicateChecker()
             try await checker.buildIndex(at: dst)
-            let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+            let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
             let progress = await ImportProgress()
             try await engine.importFiles(
                 files: preview.files, destination: dst, mode: .copy,
@@ -298,7 +298,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -338,7 +338,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -360,7 +360,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let progress = await ImportProgress()
 
         try await engine.importFiles(
@@ -395,7 +395,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         #expect(preview.files.count == 2)
         let counts = preview.filteredCounts(by: ImportFilter())
         #expect(counts.new == 2)
@@ -419,7 +419,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let counts = preview.filteredCounts(by: ImportFilter())
         #expect(counts.total == 2)
         #expect(counts.duplicates == 1)
@@ -435,7 +435,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         #expect(preview.files.isEmpty)
     }
 
@@ -453,7 +453,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let counts = preview.filteredCounts(by: ImportFilter())
         #expect(counts.total == 2)
         #expect(counts.duplicates == 2)
@@ -474,7 +474,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         let counts = preview.extensionCounts
         #expect(counts["jpg"] == 2)
         #expect(counts["cr3"] == 1)
@@ -492,7 +492,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         #expect(preview.dateRange != nil)
     }
 
@@ -507,7 +507,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         #expect(preview.files.count == 1)
         let file = preview.files[0]
         #expect(file.filename == "photo.cr3")
@@ -532,7 +532,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         let filter = ImportFilter(excludedExtensions: ["jpg", "mov"])
         let filtered = preview.filtered(by: filter)
@@ -554,7 +554,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
         #expect(preview.files.count == 2)
 
         var cal = Calendar.current
@@ -579,7 +579,7 @@ struct ImportEngineTests {
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
 
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         let filter = ImportFilter(excludedExtensions: ["jpg"])
         let counts = preview.filteredCounts(by: filter)
@@ -598,7 +598,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         let filter = ImportFilter(excludedExtensions: ["jpg"])
         let filtered = preview.filtered(by: filter)
@@ -640,7 +640,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(
+        let (_, preview) = try await engine.previewImport(
             source: originalsDir, duplicateChecker: checker, resolver: resolver
         )
 
@@ -685,7 +685,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(
+        let (_, preview) = try await engine.previewImport(
             source: originalsDir, duplicateChecker: checker, resolver: resolver
         )
 
@@ -714,7 +714,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         #expect(preview.files[0].cameraModel == "Canon EOS R6 Mark III")
     }
@@ -731,7 +731,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         let counts = preview.cameraModelCounts
         #expect(counts["Canon EOS R6"] == 2)
@@ -749,7 +749,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         let filter = ImportFilter(excludedCameraModels: ["iPhone 15 Pro"])
         let filtered = preview.filtered(by: filter)
@@ -768,7 +768,7 @@ struct ImportEngineTests {
         let engine = ImportEngine()
         let checker = DuplicateChecker()
         try await checker.buildIndex(at: dst)
-        let preview = try await engine.previewImport(source: src, duplicateChecker: checker)
+        let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
 
         let filter = ImportFilter(excludedCameraModels: ["iPhone 15 Pro"])
         let filtered = preview.filtered(by: filter)
