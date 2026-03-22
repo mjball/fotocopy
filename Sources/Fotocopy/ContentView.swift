@@ -617,11 +617,30 @@ struct ContentView: View {
     }
 
     private func startImport() {
+        let dst = URL(fileURLWithPath: destinationPath)
+        let filter = activeFilter
+
+        if let cachedPreview = previewResult {
+            let filesToCopy = cachedPreview.filtered(by: filter).filter { !$0.isDuplicate }
+            let requiredBytes = filesToCopy.reduce(0) { $0 + $1.size }
+            if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: dst.path),
+               let freeBytes = attrs[.systemFreeSize] as? Int,
+               requiredBytes > freeBytes {
+                let needed = ByteCountFormatter.string(fromByteCount: Int64(requiredBytes), countStyle: .file)
+                let available = ByteCountFormatter.string(fromByteCount: Int64(freeBytes), countStyle: .file)
+                let alert = NSAlert()
+                alert.messageText = "Not enough disk space"
+                alert.informativeText = "Import needs \(needed) but only \(available) is available on the destination."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                return
+            }
+        }
+
         progress.reset()
 
-        let dst = URL(fileURLWithPath: destinationPath)
         let mode = TransferMode(rawValue: transferMode) ?? .copy
-        let filter = activeFilter
         let cachedPreview = previewResult
 
         previewTask?.cancel()
