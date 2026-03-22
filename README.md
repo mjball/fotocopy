@@ -5,12 +5,14 @@ A small macOS app for importing photos and videos from SD cards and external dri
 ## Features
 
 - Imports JPG, HEIC, RAW (CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2), and video (MOV/MP4/M4V)
-- Organizes files into `YYYY/YYYY-MM-DD/` folders by EXIF date
-- Preview scan shows new vs duplicate files before importing
+- Organizes files into `YYYY/MM/DD/` folders by EXIF date
+- Preview scan with interactive type, camera model, and date range filters
 - Skips duplicates by filename + size matching
-- Copy or move mode
-- Optional auto-open when a named volume mounts
-- Eject source/destination on completion
+- Imports from Apple Photos libraries (recovers original camera filenames)
+- Copy or move mode (move auto-disabled for Photos libraries)
+- Auto-open when source/destination volumes mount
+- Eject source/destination after import
+- Check for updates from the menu bar (Cmd+U)
 
 ## Install
 
@@ -40,4 +42,20 @@ To build a release `.app` bundle:
 
 ```
 ./Scripts/build-release.sh
+```
+
+## Releasing
+
+Requires [GitHub CLI](https://cli.github.com/) authenticated with repo access.
+
+```
+./Scripts/build-release.sh --release v1.0
+```
+
+This builds the app, generates the icon from `Resources/AppIcon.png`, stamps the version into the bundle, code-signs, zips, and creates a GitHub release with the zip and install script attached.
+
+## Running tests
+
+```
+swift test
 ```
