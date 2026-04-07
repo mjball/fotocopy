@@ -20,6 +20,7 @@ struct SourceScanCache: Sendable {
 struct SourceFile: Sendable {
     let url: URL
     let filename: String
+    let sourceBucket: String
     let ext: String
     let size: Int
     let date: Date?
@@ -30,6 +31,7 @@ struct SourceFile: Sendable {
 struct PreviewFile: Sendable {
     let url: URL
     let filename: String
+    let sourceBucket: String
     let ext: String
     let size: Int
     let date: Date?
@@ -40,6 +42,7 @@ struct PreviewFile: Sendable {
     init(source: SourceFile, isDuplicate: Bool) {
         self.url = source.url
         self.filename = source.filename
+        self.sourceBucket = source.sourceBucket
         self.ext = source.ext
         self.size = source.size
         self.date = source.date
@@ -48,9 +51,10 @@ struct PreviewFile: Sendable {
         self.isDuplicate = isDuplicate
     }
 
-    init(url: URL, filename: String, ext: String, size: Int, date: Date?, dateSource: DateSource?, cameraModel: String?, isDuplicate: Bool) {
+    init(url: URL, filename: String, sourceBucket: String = DestinationManifest.rootBucket, ext: String, size: Int, date: Date?, dateSource: DateSource?, cameraModel: String?, isDuplicate: Bool) {
         self.url = url
         self.filename = filename
+        self.sourceBucket = sourceBucket
         self.ext = ext
         self.size = size
         self.date = date
@@ -169,6 +173,7 @@ actor ImportEngine {
                 group.addTask {
                     let rawFilename = fileURL.lastPathComponent
                     let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
+                    let sourceBucket = Self.sourceBucket(for: fileURL, sourceRoot: source, resolver: resolver)
                     let ext = (filename as NSString).pathExtension.lowercased()
 
                     guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
@@ -179,6 +184,7 @@ actor ImportEngine {
                     return SourceFile(
                         url: fileURL,
                         filename: filename,
+                        sourceBucket: sourceBucket,
                         ext: ext,
                         size: fileSize,
                         date: metadata.dateResult?.date,
@@ -207,7 +213,11 @@ actor ImportEngine {
     ) async -> PreviewResult {
         var previewFiles: [PreviewFile] = []
         for source in sourceFiles {
-            let isDuplicate = await duplicateChecker.isDuplicate(filename: source.filename, size: source.size)
+            let isDuplicate = await duplicateChecker.isDuplicate(
+                filename: source.filename,
+                size: source.size,
+                sourceBucket: source.sourceBucket
+            )
             previewFiles.append(PreviewFile(source: source, isDuplicate: isDuplicate))
         }
         return PreviewResult(files: previewFiles)
@@ -331,7 +341,14 @@ actor ImportEngine {
                 try fm.moveItem(at: file.url, to: finalDest)
             }
 
-            await duplicateChecker.markImported(filename: filename, size: file.size)
+            let relativePath = self.relativePath(for: finalDest, within: destination)
+            try await duplicateChecker.markImported(
+                filename: filename,
+                size: file.size,
+                sourceBucket: file.sourceBucket,
+                destinationRelativePath: relativePath,
+                destinationSize: file.size
+            )
         } catch {
             await MainActor.run {
                 progress.errors.append((file: filename, message: error.localizedDescription))
@@ -342,5 +359,39 @@ actor ImportEngine {
             progress.recordCompletion(bytes: file.size)
             progress.processedFiles += 1
         }
+    }
+
+    private static func sourceBucket(
+        for fileURL: URL,
+        sourceRoot: URL,
+        resolver: PhotosLibraryResolver?
+    ) -> String {
+        if resolver != nil {
+            return DestinationManifest.photosLibraryBucket
+        }
+
+        let rootPath = sourceRoot.standardizedFileURL.path
+        let parentPath = fileURL.deletingLastPathComponent().standardizedFileURL.path
+        let relativeParent: String
+        if parentPath == rootPath {
+            relativeParent = ""
+        } else {
+            relativeParent = String(parentPath.dropFirst(rootPath.count + 1))
+        }
+
+        for component in relativeParent.split(separator: "/").reversed() {
+            let prefix = component.prefix(3)
+            if prefix.count == 3, prefix.allSatisfy(\.isNumber) {
+                return String(prefix)
+            }
+        }
+
+        return relativeParent.isEmpty ? DestinationManifest.rootBucket : relativeParent
+    }
+
+    private func relativePath(for fileURL: URL, within rootURL: URL) -> String {
+        let rootPath = rootURL.standardizedFileURL.path
+        let filePath = fileURL.standardizedFileURL.path
+        return String(filePath.dropFirst(rootPath.count + 1))
     }
 }

@@ -7,7 +7,7 @@ A small macOS app for importing photos and videos from SD cards and external dri
 - Imports JPG, HEIC, RAW (CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2), and video (MOV/MP4/M4V)
 - Organizes files into `YYYY/MM/DD/` folders by EXIF date
 - Preview scan with interactive type, camera model, and date range filters
-- Skips duplicates by filename + size matching
+- Skips duplicates using a destination manifest keyed by source folder + filename + size
 - Imports from Apple Photos libraries (recovers original camera filenames)
 - Copy or move mode (move auto-disabled for Photos libraries)
 - Auto-open when source/destination volumes mount
