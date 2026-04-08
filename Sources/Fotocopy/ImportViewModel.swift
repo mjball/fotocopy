@@ -12,9 +12,11 @@ final class ImportViewModel {
 
     var previewResult: PreviewResult?
     var isPreviewing = false
+    var isRebuildingManifest = false
     var scanScanned = 0
     var scanTotal = 0
     var previewError: String?
+    var manifestAttention: ManifestAttention?
     var dateFrom: Date?
     var dateTo: Date?
     var showDateFilter = false
@@ -53,6 +55,12 @@ final class ImportViewModel {
     var importDisabledReason: String? {
         if sourcePath.isEmpty || destinationPath.isEmpty {
             return "Select source and destination folders"
+        }
+        if isRebuildingManifest {
+            return "Destination manifest rebuild in progress..."
+        }
+        if let manifestAttention {
+            return manifestAttention.importDisabledReason
         }
         if isPreviewing {
             return "Scanning in progress..."
@@ -102,6 +110,7 @@ final class ImportViewModel {
         isPreviewing = false
         previewResult = nil
         previewError = nil
+        manifestAttention = nil
         scanScanned = 0
         scanTotal = 0
     }
@@ -126,6 +135,7 @@ final class ImportViewModel {
         scanScanned = 0
         scanTotal = 0
         previewError = nil
+        manifestAttention = nil
         let src = URL(fileURLWithPath: sourcePath)
         let dst = URL(fileURLWithPath: destinationPath)
         let cachedSource = sourceScanCache
@@ -135,7 +145,15 @@ final class ImportViewModel {
             let checker = DuplicateChecker()
 
             do {
-                try await checker.buildIndex(at: dst)
+                let indexStatus = try await checker.buildIndex(at: dst)
+                if case let .requiresUserAction(attention) = indexStatus {
+                    manifestAttention = attention
+                    previewResult = nil
+                    isPreviewing = false
+                    scanScanned = 0
+                    scanTotal = 0
+                    return
+                }
 
                 let sourceFiles: [SourceFile]
 
@@ -219,7 +237,13 @@ final class ImportViewModel {
             let checker = DuplicateChecker()
 
             do {
-                try await checker.buildIndex(at: dst)
+                let indexStatus = try await checker.buildIndex(at: dst)
+                if case let .requiresUserAction(attention) = indexStatus {
+                    manifestAttention = attention
+                    progress.isImporting = false
+                    importTask = nil
+                    return
+                }
 
                 let filesToImport: [PreviewFile]
 
@@ -260,6 +284,29 @@ final class ImportViewModel {
     func resetAndPreview() {
         progress.reset()
         runPreview()
+    }
+
+    func rebuildManifest() {
+        guard !destinationPath.isEmpty, !isRebuildingManifest else { return }
+
+        let destinationURL = URL(fileURLWithPath: destinationPath)
+        isRebuildingManifest = true
+        previewError = nil
+        previewResult = nil
+
+        Task {
+            let checker = DuplicateChecker()
+
+            do {
+                _ = try await checker.rebuildManifest(at: destinationURL)
+                manifestAttention = nil
+                isRebuildingManifest = false
+                runPreview()
+            } catch {
+                previewError = error.localizedDescription
+                isRebuildingManifest = false
+            }
+        }
     }
 
     func cleanup() {

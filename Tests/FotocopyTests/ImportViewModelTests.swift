@@ -33,6 +33,21 @@ struct ImportViewModelTests {
         #expect(vm.importDisabledReason == "Scanning in progress...")
     }
 
+    @Test func disabledWhenManifestNeedsAttention() {
+        let vm = ImportViewModel()
+        vm.sourcePath = "/source"
+        vm.destinationPath = "/dest"
+        vm.manifestAttention = ManifestAttention(
+            kind: .missingManifest,
+            destinationFileCount: 10,
+            untrackedFileCount: 10,
+            missingFileCount: 0,
+            modifiedFileCount: 0,
+            details: nil
+        )
+        #expect(vm.importDisabledReason == "Destination manifest must be built before scanning")
+    }
+
     @Test func disabledWhenNoFilesFound() {
         let vm = ImportViewModel()
         vm.sourcePath = "/source"

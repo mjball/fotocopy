@@ -2,34 +2,59 @@ import Foundation
 
 actor DuplicateChecker {
     private var existing: Set<String> = []
+    private var manifest: DestinationManifest?
 
-    func buildIndex(at destinationURL: URL) throws {
-        existing.removeAll()
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: destinationURL,
-            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
+    func buildIndex(at destinationURL: URL) throws -> DestinationIndexStatus {
+        let manifest = DestinationManifest(destinationURL: destinationURL)
+        self.manifest = manifest
 
-        for case let fileURL as URL in enumerator {
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-                  resourceValues.isRegularFile == true,
-                  let size = resourceValues.fileSize else { continue }
-            let key = makeKey(filename: fileURL.lastPathComponent, size: size)
-            existing.insert(key)
+        let result = try manifest.prepareIndex()
+        switch result.status {
+        case .ready:
+            existing = result.keys
+            return .ready
+        case let .requiresUserAction(attention):
+            existing.removeAll()
+            return .requiresUserAction(attention)
         }
     }
 
-    func isDuplicate(filename: String, size: Int) -> Bool {
-        existing.contains(makeKey(filename: filename, size: size))
+    func rebuildManifest(at destinationURL: URL) async throws -> DestinationIndexStatus {
+        let manifest = DestinationManifest(destinationURL: destinationURL)
+        self.manifest = manifest
+        try await manifest.rebuildManifest()
+        let result = try manifest.prepareIndex()
+        switch result.status {
+        case .ready:
+            existing = result.keys
+            return .ready
+        case let .requiresUserAction(attention):
+            existing.removeAll()
+            return .requiresUserAction(attention)
+        }
     }
 
-    func markImported(filename: String, size: Int) {
-        existing.insert(makeKey(filename: filename, size: size))
+    func isDuplicate(filename: String, size: Int, sourceBucket: String) -> Bool {
+        existing.contains(makeDuplicateKey(filename: filename, size: size, sourceBucket: sourceBucket))
     }
 
-    private func makeKey(filename: String, size: Int) -> String {
-        "\(filename):\(size)"
+    func markImported(
+        filename: String,
+        size: Int,
+        sourceBucket: String,
+        destinationRelativePath: String?,
+        destinationSize: Int
+    ) throws {
+        existing.insert(makeDuplicateKey(filename: filename, size: size, sourceBucket: sourceBucket))
+
+        if let manifest, let destinationRelativePath {
+            try manifest.recordImport(
+                destinationRelativePath: destinationRelativePath,
+                sourceFilename: filename,
+                sourceBucket: sourceBucket,
+                sourceSize: size,
+                destinationSize: destinationSize
+            )
+        }
     }
 }

@@ -19,7 +19,7 @@ struct ContentView: View {
             pathSection
             modeSection
             if !vm.progress.isComplete {
-                if vm.isPreviewing || vm.previewResult != nil || vm.previewError != nil {
+                if vm.isPreviewing || vm.isRebuildingManifest || vm.manifestAttention != nil || vm.previewResult != nil || vm.previewError != nil {
                     previewSection
                 }
                 actionSection
@@ -230,6 +230,33 @@ struct ContentView: View {
                         Spacer()
                         Button("Cancel") { vm.cancelPreview() }
                             .controlSize(.small)
+                    }
+                }
+            } else if vm.isRebuildingManifest {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Rebuilding destination manifest...")
+                        .foregroundStyle(.secondary)
+                }
+            } else if let attention = vm.manifestAttention {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(attention.title, systemImage: "externaldrive.badge.exclamationmark")
+                        .foregroundStyle(.orange)
+                    Text(attention.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(attention.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Preview and import are paused until the destination manifest is ready.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button(attention.actionLabel) {
+                            confirmManifestRebuild(attention)
+                        }
+                        Spacer()
                     }
                 }
             } else if let error = vm.previewError {
@@ -532,6 +559,19 @@ struct ContentView: View {
             }
             try? await Task.sleep(for: .milliseconds(500))
             NSApp.terminate(nil)
+        }
+    }
+
+    private func confirmManifestRebuild(_ attention: ManifestAttention) {
+        let alert = NSAlert()
+        alert.messageText = attention.title
+        alert.informativeText = attention.confirmationMessage
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: attention.actionLabel)
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            vm.rebuildManifest()
         }
     }
 }
