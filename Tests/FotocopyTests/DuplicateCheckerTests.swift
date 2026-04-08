@@ -200,6 +200,63 @@ struct DuplicateCheckerTests {
         #expect(await checker.isDuplicate(filename: "IMG_0001.CR3", size: 1000, sourceBucket: "101") == true)
     }
 
+    @Test func modifiedManifestRequiresRebuildAndRefreshesDuplicateKey() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+
+        try createFile(dir, name: "known.jpg", size: 100)
+        try await checker.markImported(
+            filename: "known.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket,
+            destinationRelativePath: "known.jpg",
+            destinationSize: 100
+        )
+
+        try createFile(dir, name: "known.jpg", size: 200)
+
+        let status = try await checker.buildIndex(at: dir)
+        #expect(status == .requiresUserAction(
+            ManifestAttention(
+                kind: .outOfSync,
+                destinationFileCount: 1,
+                untrackedFileCount: 0,
+                missingFileCount: 0,
+                modifiedFileCount: 1,
+                details: nil
+            )
+        ))
+
+        #expect(try await checker.rebuildManifest(at: dir) == .ready)
+        #expect(await checker.isDuplicate(filename: "known.jpg", size: 100, sourceBucket: DestinationManifest.rootBucket) == false)
+        #expect(await checker.isDuplicate(filename: "known.jpg", size: 200, sourceBucket: DestinationManifest.rootBucket) == true)
+    }
+
+    @Test func rebuildManifestPrefersEarliestCompatibleBucket() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let dayDir = dir
+            .appendingPathComponent("2024")
+            .appendingPathComponent("01")
+            .appendingPathComponent("01")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        try createFile(dayDir, name: "IMG_0001.CR3", size: 1000)
+        try createFile(dayDir, name: "IMG_0001_1.CR3", size: 1000)
+        try createFile(dayDir, name: "IMG_0002.CR3", size: 1200)
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.rebuildManifest(at: dir) == .ready)
+
+        #expect(await checker.isDuplicate(filename: "IMG_0001.CR3", size: 1000, sourceBucket: "100") == true)
+        #expect(await checker.isDuplicate(filename: "IMG_0001.CR3", size: 1000, sourceBucket: "101") == true)
+        #expect(await checker.isDuplicate(filename: "IMG_0002.CR3", size: 1200, sourceBucket: "100") == true)
+        #expect(await checker.isDuplicate(filename: "IMG_0002.CR3", size: 1200, sourceBucket: "101") == false)
+    }
+
     @Test func outOfSyncManifestRequiresReconcile() async throws {
         let dir = try makeTempDir()
         defer { cleanup(dir) }

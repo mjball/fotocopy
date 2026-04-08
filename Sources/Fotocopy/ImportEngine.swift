@@ -152,6 +152,11 @@ actor ImportEngine {
         let fm = FileManager.default
         let total = urls.count
         let maxConcurrency = 16
+        let sourceBuckets = Self.sourceBuckets(
+            for: urls,
+            sourceRoot: source,
+            resolver: resolver
+        )
 
         return await withTaskGroup(of: SourceFile?.self) { group in
             var results: [SourceFile] = []
@@ -173,7 +178,7 @@ actor ImportEngine {
                 group.addTask {
                     let rawFilename = fileURL.lastPathComponent
                     let filename = resolver?.originalFilename(for: rawFilename) ?? rawFilename
-                    let sourceBucket = Self.sourceBucket(for: fileURL, sourceRoot: source, resolver: resolver)
+                    let sourceBucket = sourceBuckets[fileURL] ?? DestinationManifest.rootBucket
                     let ext = (filename as NSString).pathExtension.lowercased()
 
                     guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
@@ -365,15 +370,45 @@ actor ImportEngine {
         }
     }
 
-    private static func sourceBucket(
-        for fileURL: URL,
+    private static func sourceBuckets(
+        for fileURLs: [URL],
         sourceRoot: URL,
         resolver: PhotosLibraryResolver?
-    ) -> String {
-        if resolver != nil {
-            return DestinationManifest.photosLibraryBucket
+    ) -> [URL: String] {
+        guard resolver == nil else {
+            return Dictionary(
+                uniqueKeysWithValues: fileURLs.map { ($0, DestinationManifest.photosLibraryBucket) }
+            )
         }
 
+        let identitiesByURL = Dictionary(
+            uniqueKeysWithValues: fileURLs.map {
+                ($0, sourceFolderIdentity(for: $0, sourceRoot: sourceRoot))
+            }
+        )
+        let numberedIdentities = identitiesByURL.values
+            .filter { $0 != DestinationManifest.rootBucket }
+        let bucketIDsByIdentity = Dictionary(
+            uniqueKeysWithValues: Array(Set(numberedIdentities))
+                .sorted()
+                .enumerated()
+                .map { index, identity in
+                    (identity, String(format: "%03d", 100 + index))
+                }
+        )
+
+        return Dictionary(
+            uniqueKeysWithValues: identitiesByURL.map { fileURL, identity in
+                let bucket = bucketIDsByIdentity[identity] ?? DestinationManifest.rootBucket
+                return (fileURL, bucket)
+            }
+        )
+    }
+
+    private static func sourceFolderIdentity(
+        for fileURL: URL,
+        sourceRoot: URL
+    ) -> String {
         let rootPath = sourceRoot.standardizedFileURL.path
         let parentPath = fileURL.deletingLastPathComponent().standardizedFileURL.path
         let relativeParent: String
@@ -383,10 +418,11 @@ actor ImportEngine {
             relativeParent = String(parentPath.dropFirst(rootPath.count + 1))
         }
 
-        for component in relativeParent.split(separator: "/").reversed() {
-            let prefix = component.prefix(3)
+        let components = relativeParent.split(separator: "/")
+        for index in components.indices.reversed() {
+            let prefix = components[index].prefix(3)
             if prefix.count == 3, prefix.allSatisfy(\.isNumber) {
-                return String(prefix)
+                return components[...index].joined(separator: "/")
             }
         }
 
