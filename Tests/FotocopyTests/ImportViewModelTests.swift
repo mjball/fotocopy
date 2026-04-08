@@ -251,4 +251,60 @@ struct ImportViewModelTests {
         #expect(counts.total == 1)
         #expect(counts.new == 1)
     }
+
+    @Test func startImportSeedsTransferBytesFromNonDuplicatesOnly() async throws {
+        let source = try makeTempDir()
+        let destination = try makeTempDir()
+        defer { cleanup(source); cleanup(destination) }
+
+        let importable = source.appendingPathComponent("importable.jpg")
+        let duplicate = source.appendingPathComponent("duplicate.jpg")
+        try Data(repeating: 0x01, count: 256).write(to: importable)
+        try Data(repeating: 0x02, count: 128).write(to: duplicate)
+
+        let vm = ImportViewModel()
+        vm.sourcePath = source.path
+        vm.destinationPath = destination.path
+        vm.previewResult = PreviewResult(files: [
+            PreviewFile(
+                url: importable,
+                filename: "importable.jpg",
+                ext: "jpg",
+                size: 256,
+                date: Date(timeIntervalSince1970: 1_700_000_000),
+                dateSource: .exif,
+                cameraModel: nil,
+                isDuplicate: false
+            ),
+            PreviewFile(
+                url: duplicate,
+                filename: "duplicate.jpg",
+                ext: "jpg",
+                size: 128,
+                date: Date(timeIntervalSince1970: 1_700_000_001),
+                dateSource: .exif,
+                cameraModel: nil,
+                isDuplicate: true
+            )
+        ])
+
+        vm.startImport()
+        while !vm.progress.isComplete {
+            await Task.yield()
+        }
+
+        #expect(vm.progress.totalFiles == 2)
+        #expect(vm.progress.totalTransferBytes == 256)
+        #expect(vm.progress.duplicatesSkipped == 1)
+    }
+
+    private func makeTempDir() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func cleanup(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+    }
 }

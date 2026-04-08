@@ -246,12 +246,18 @@ struct ContentView: View {
                     Text(attention.summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(attention.message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("Preview and import are paused until the destination manifest is ready.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Button(attention.actionLabel) {
                             confirmManifestRebuild(attention)
