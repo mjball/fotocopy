@@ -386,15 +386,26 @@ actor ImportEngine {
                 ($0, sourceFolderIdentity(for: $0, sourceRoot: sourceRoot))
             }
         )
-        let numberedIdentities = identitiesByURL.values
-            .filter { $0 != DestinationManifest.rootBucket }
+        let identities = Array(Set(identitiesByURL.values)).sorted()
+        let baseBucketsByIdentity = Dictionary(
+            uniqueKeysWithValues: identities.map { identity in
+                (identity, legacySourceBucket(forIdentity: identity))
+            }
+        )
+        let identitiesByBaseBucket = Dictionary(grouping: identities, by: {
+            baseBucketsByIdentity[$0] ?? DestinationManifest.rootBucket
+        })
         let bucketIDsByIdentity = Dictionary(
-            uniqueKeysWithValues: Array(Set(numberedIdentities))
-                .sorted()
-                .enumerated()
-                .map { index, identity in
-                    (identity, String(format: "%03d", 100 + index))
+            uniqueKeysWithValues: identities.map { identity in
+                let baseBucket = baseBucketsByIdentity[identity] ?? DestinationManifest.rootBucket
+                let collidingIdentities = identitiesByBaseBucket[baseBucket] ?? []
+                guard collidingIdentities.count > 1,
+                      let collisionIndex = collidingIdentities.firstIndex(of: identity) else {
+                    return (identity, baseBucket)
                 }
+                let bucket = collisionIndex == 0 ? baseBucket : "\(baseBucket)#\(collisionIndex)"
+                return (identity, bucket)
+            }
         )
 
         return Dictionary(
@@ -427,6 +438,21 @@ actor ImportEngine {
         }
 
         return relativeParent.isEmpty ? DestinationManifest.rootBucket : relativeParent
+    }
+
+    private static func legacySourceBucket(forIdentity identity: String) -> String {
+        guard identity != DestinationManifest.rootBucket else {
+            return DestinationManifest.rootBucket
+        }
+
+        for component in identity.split(separator: "/").reversed() {
+            let prefix = component.prefix(3)
+            if prefix.count == 3, prefix.allSatisfy(\.isNumber) {
+                return String(prefix)
+            }
+        }
+
+        return identity
     }
 
     private func relativePath(for fileURL: URL, within rootURL: URL) -> String {
