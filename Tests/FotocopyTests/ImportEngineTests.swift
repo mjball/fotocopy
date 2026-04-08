@@ -275,6 +275,45 @@ struct ImportEngineTests {
         #expect(Set(preview.files.map(\.sourceBucket)) == ["100", "101"])
     }
 
+    @Test func previewDistinguishesDistinctHundredSeriesFolders() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        let aggregateRoot = src.appendingPathComponent("cards")
+        let cardA = aggregateRoot.appendingPathComponent("cardA").appendingPathComponent("100CANON")
+        let cardB = aggregateRoot.appendingPathComponent("cardB").appendingPathComponent("100EOSR6")
+        try FileManager.default.createDirectory(at: cardA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cardB, withIntermediateDirectories: true)
+
+        let content = "same content"
+        try createFile(cardA, name: "IMG_0001.CR3", content: content)
+        try createFile(cardB, name: "IMG_0001.CR3", content: content)
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dst) == .ready)
+
+        let existingSub = dst.appendingPathComponent("existing")
+        try FileManager.default.createDirectory(at: existingSub, withIntermediateDirectories: true)
+        try createFile(existingSub, name: "IMG_0001.CR3", content: content)
+        try await registerImported(
+            checker: checker,
+            relativePath: "existing/IMG_0001.CR3",
+            filename: "IMG_0001.CR3",
+            size: content.utf8.count,
+            sourceBucket: "100"
+        )
+
+        let engine = ImportEngine()
+        let (_, preview) = try await engine.previewImport(source: aggregateRoot, duplicateChecker: checker)
+        let counts = preview.filteredCounts(by: ImportFilter())
+
+        #expect(counts.total == 2)
+        #expect(counts.new == 1)
+        #expect(counts.duplicates == 1)
+        #expect(Set(preview.files.map(\.sourceBucket)) == ["100", "101"])
+    }
+
     @Test func importHandlesFilenameCollision() async throws {
         let src = try makeTempDir()
         let dst = try makeTempDir()

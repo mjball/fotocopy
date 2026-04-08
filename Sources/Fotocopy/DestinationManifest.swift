@@ -271,11 +271,7 @@ struct DestinationManifest {
                 return (relativePath, snapshot.size)
             }
 
-            if !modified.isEmpty {
-                try updateDestinationSizes(db: db, sizeUpdates: modified)
-            }
-
-            if !untracked.isEmpty || !missing.isEmpty {
+            if !untracked.isEmpty || !missing.isEmpty || !modified.isEmpty {
                 let attention = ManifestAttention(
                     kind: .outOfSync,
                     destinationFileCount: snapshots.count,
@@ -333,13 +329,14 @@ struct DestinationManifest {
 
         for snapshot in snapshots {
             if let row = existingRowsByPath[snapshot.relativePath] {
+                let refreshedSize = snapshot.size
                 rows.append(
                     ManifestRow(
                         destinationRelativePath: row.destinationRelativePath,
                         sourceFilename: row.sourceFilename,
                         sourceBucket: row.sourceBucket,
-                        sourceSize: row.sourceSize,
-                        destinationSizeLastSeen: snapshot.size,
+                        sourceSize: refreshedSize,
+                        destinationSizeLastSeen: refreshedSize,
                         provenance: row.provenance
                     )
                 )
@@ -396,23 +393,26 @@ struct DestinationManifest {
             }
         }
 
-        var currentBucket = max(startingBucket, 100)
-        var seenInCurrentBucket: Set<String> = []
+        let initialBucket = max(startingBucket, 100)
+        var filenamesByBucket: [Set<String>] = []
         var rows: [ManifestRow] = []
         rows.reserveCapacity(sorted.count)
 
         for candidate in sorted {
-            if seenInCurrentBucket.contains(candidate.sourceFilename) {
-                currentBucket += 1
-                seenInCurrentBucket.removeAll()
+            let bucketIndex: Int
+            if let existingBucketIndex = filenamesByBucket.firstIndex(where: { !$0.contains(candidate.sourceFilename) }) {
+                bucketIndex = existingBucketIndex
+            } else {
+                bucketIndex = filenamesByBucket.count
+                filenamesByBucket.append([])
             }
 
-            seenInCurrentBucket.insert(candidate.sourceFilename)
+            filenamesByBucket[bucketIndex].insert(candidate.sourceFilename)
             rows.append(
                 ManifestRow(
                     destinationRelativePath: candidate.snapshot.relativePath,
                     sourceFilename: candidate.sourceFilename,
-                    sourceBucket: String(format: "%03d", currentBucket),
+                    sourceBucket: String(format: "%03d", initialBucket + bucketIndex),
                     sourceSize: candidate.snapshot.size,
                     destinationSizeLastSeen: candidate.snapshot.size,
                     provenance: "inferred"
@@ -526,34 +526,6 @@ struct DestinationManifest {
         } catch {
             try? exec("ROLLBACK", in: db)
             throw error
-        }
-    }
-
-    private func updateDestinationSizes(
-        db: OpaquePointer?,
-        sizeUpdates: [(String, Int)]
-    ) throws {
-        let sql = """
-            UPDATE imports
-            SET destination_size_last_seen = ?
-            WHERE destination_rel_path = ?
-            """
-
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw manifestError(db, fallback: "Failed to prepare manifest update")
-        }
-        defer { sqlite3_finalize(stmt) }
-
-        for (relativePath, size) in sizeUpdates {
-            sqlite3_reset(stmt)
-            sqlite3_clear_bindings(stmt)
-            sqlite3_bind_int64(stmt, 1, sqlite3_int64(size))
-            sqlite3_bind_text(stmt, 2, relativePath, -1, SQLITE_TRANSIENT)
-
-            guard sqlite3_step(stmt) == SQLITE_DONE else {
-                throw manifestError(db, fallback: "Failed to update manifest row")
-            }
         }
     }
 
