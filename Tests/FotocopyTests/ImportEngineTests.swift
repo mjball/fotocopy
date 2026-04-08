@@ -311,7 +311,43 @@ struct ImportEngineTests {
         #expect(counts.total == 2)
         #expect(counts.new == 1)
         #expect(counts.duplicates == 1)
-        #expect(Set(preview.files.map(\.sourceBucket)) == ["100", "101"])
+        #expect(Set(preview.files.map(\.sourceBucket)) == ["100", "100#1"])
+    }
+
+    @Test func previewPreservesLegacySingleNumericBucket() async throws {
+        let src = try makeTempDir()
+        let dst = try makeTempDir()
+        defer { cleanup(src); cleanup(dst) }
+
+        let sourceRoot = src.appendingPathComponent("DCIM")
+        let bucket101 = sourceRoot.appendingPathComponent("101EOSR6")
+        try FileManager.default.createDirectory(at: bucket101, withIntermediateDirectories: true)
+
+        let content = "same content"
+        try createFile(bucket101, name: "IMG_0001.CR3", content: content)
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dst) == .ready)
+
+        let existingSub = dst.appendingPathComponent("existing")
+        try FileManager.default.createDirectory(at: existingSub, withIntermediateDirectories: true)
+        try createFile(existingSub, name: "IMG_0001.CR3", content: content)
+        try await registerImported(
+            checker: checker,
+            relativePath: "existing/IMG_0001.CR3",
+            filename: "IMG_0001.CR3",
+            size: content.utf8.count,
+            sourceBucket: "101"
+        )
+
+        let engine = ImportEngine()
+        let (_, preview) = try await engine.previewImport(source: sourceRoot, duplicateChecker: checker)
+        let counts = preview.filteredCounts(by: ImportFilter())
+
+        #expect(counts.total == 1)
+        #expect(counts.new == 0)
+        #expect(counts.duplicates == 1)
+        #expect(preview.files.map(\.sourceBucket) == ["101"])
     }
 
     @Test func importHandlesFilenameCollision() async throws {
