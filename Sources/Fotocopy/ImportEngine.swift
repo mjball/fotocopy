@@ -256,8 +256,7 @@ actor ImportEngine {
 
                 if file.isDuplicate {
                     await MainActor.run {
-                        progress.duplicatesSkipped += 1
-                        progress.processedFiles += 1
+                        progress.recordDuplicateSkipped()
                     }
                     continue
                 }
@@ -297,7 +296,7 @@ actor ImportEngine {
         guard let date = file.date else {
             await MainActor.run {
                 progress.errors.append((file: filename, message: "Could not determine date"))
-                progress.processedFiles += 1
+                progress.recordFailedTransfer(bytes: file.size)
             }
             return
         }
@@ -319,6 +318,8 @@ actor ImportEngine {
             .appendingPathComponent(month)
             .appendingPathComponent(day)
         let destFile = destDir.appendingPathComponent(filename)
+
+        var didSucceed = false
 
         do {
             try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
@@ -349,15 +350,18 @@ actor ImportEngine {
                 destinationRelativePath: relativePath,
                 destinationSize: file.size
             )
+            didSucceed = true
         } catch {
             await MainActor.run {
                 progress.errors.append((file: filename, message: error.localizedDescription))
+                progress.recordFailedTransfer(bytes: file.size)
             }
         }
 
+        guard didSucceed else { return }
+
         await MainActor.run {
-            progress.recordCompletion(bytes: file.size)
-            progress.processedFiles += 1
+            progress.recordSuccessfulTransfer(bytes: file.size)
         }
     }
 

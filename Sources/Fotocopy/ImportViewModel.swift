@@ -258,9 +258,13 @@ final class ImportViewModel {
                     filesToImport = preview.filtered(by: filter)
                 }
 
-                progress.totalFiles = filesToImport.count
-                progress.totalBytesToImport = filesToImport.reduce(0) { $0 + $1.size }
-                progress.isImporting = true
+                let totalTransferBytes = filesToImport
+                    .filter { !$0.isDuplicate }
+                    .reduce(0) { $0 + $1.size }
+                progress.beginImport(
+                    totalFiles: filesToImport.count,
+                    totalTransferBytes: totalTransferBytes
+                )
 
                 try await engine.importFiles(
                     files: filesToImport,

@@ -379,6 +379,76 @@ struct ImportEngineTests {
         #expect(processed == 0)
     }
 
+    @Test func importMissingSourceCountsAsFailedTransfer() async throws {
+        let dst = try makeTempDir()
+        defer { cleanup(dst) }
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        _ = try await checker.buildIndex(at: dst)
+        let progress = await ImportProgress()
+        await progress.beginImport(totalFiles: 1, totalTransferBytes: 1_024)
+
+        let missing = PreviewFile(
+            url: dst.appendingPathComponent("missing.jpg"),
+            filename: "missing.jpg",
+            ext: "jpg",
+            size: 1_024,
+            date: Date(),
+            dateSource: .exif,
+            cameraModel: nil,
+            isDuplicate: false
+        )
+
+        try await engine.importFiles(
+            files: [missing], destination: dst, mode: .copy,
+            duplicateChecker: checker, progress: progress
+        )
+
+        let failed = await progress.failedFiles
+        let settled = await progress.settledTransferBytes
+        let transferred = await progress.transferredBytes
+        let throughput = await progress.throughputBytesPerSecond
+        #expect(failed == 1)
+        #expect(settled == 1_024)
+        #expect(transferred == 0)
+        #expect(throughput == nil)
+    }
+
+    @Test func importUndatedFileCountsAsFailedTransfer() async throws {
+        let dst = try makeTempDir()
+        defer { cleanup(dst) }
+
+        let engine = ImportEngine()
+        let checker = DuplicateChecker()
+        _ = try await checker.buildIndex(at: dst)
+        let progress = await ImportProgress()
+        await progress.beginImport(totalFiles: 1, totalTransferBytes: 512)
+
+        let undated = PreviewFile(
+            url: dst.appendingPathComponent("undated.jpg"),
+            filename: "undated.jpg",
+            ext: "jpg",
+            size: 512,
+            date: nil,
+            dateSource: nil,
+            cameraModel: nil,
+            isDuplicate: false
+        )
+
+        try await engine.importFiles(
+            files: [undated], destination: dst, mode: .copy,
+            duplicateChecker: checker, progress: progress
+        )
+
+        let failed = await progress.failedFiles
+        let settled = await progress.settledTransferBytes
+        let transferred = await progress.transferredBytes
+        #expect(failed == 1)
+        #expect(settled == 512)
+        #expect(transferred == 0)
+    }
+
     @Test func importMarksInChecker() async throws {
         let src = try makeTempDir()
         let dst = try makeTempDir()
