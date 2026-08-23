@@ -712,7 +712,32 @@ struct ImportEngineTests {
         _ = try await checker.buildIndex(at: dst)
 
         let (_, preview) = try await engine.previewImport(source: src, duplicateChecker: checker)
-        #expect(preview.dateRange != nil)
+        #expect(preview.sourceDateRange != nil)
+    }
+
+    @Test func importDateRangesExcludeDuplicatesAndRespectFilters() {
+        let duplicateDate = Date(timeIntervalSince1970: 1_000)
+        let jpgDate = Date(timeIntervalSince1970: 2_000)
+        let rawDate = Date(timeIntervalSince1970: 3_000)
+        let preview = PreviewResult(files: [
+            PreviewFile(url: URL(fileURLWithPath: "/duplicate.cr3"), filename: "duplicate.cr3", ext: "cr3", size: 100, date: duplicateDate, dateSource: .exif, cameraModel: nil, isDuplicate: true),
+            PreviewFile(url: URL(fileURLWithPath: "/new.jpg"), filename: "new.jpg", ext: "jpg", size: 100, date: jpgDate, dateSource: .exif, cameraModel: nil, isDuplicate: false),
+            PreviewFile(url: URL(fileURLWithPath: "/new.cr3"), filename: "new.cr3", ext: "cr3", size: 100, date: rawDate, dateSource: .exif, cameraModel: nil, isDuplicate: false),
+        ])
+
+        let sourceRange = preview.sourceDateRange
+        #expect(sourceRange?.min == duplicateDate)
+        #expect(sourceRange?.max == rawDate)
+
+        let importRange = preview.importDateRange(by: ImportFilter())
+        #expect(importRange?.min == jpgDate)
+        #expect(importRange?.max == rawDate)
+
+        let filter = ImportFilter(excludedExtensions: ["jpg"])
+        let filteredRange = preview.importDateRange(by: filter)
+        #expect(filteredRange?.min == rawDate)
+        #expect(filteredRange?.max == rawDate)
+        #expect(preview.availableImportDateRange(by: filter)?.min == rawDate)
     }
 
     @Test func previewFileCarriesMetadata() async throws {

@@ -289,8 +289,14 @@ struct ContentView: View {
                     cameraModelChips(preview: preview)
                 }
 
-                if let range = preview.dateRange {
-                    dateRangeRow(range: range)
+                if let availableRange = vm.availableImportDateRange {
+                    dateRangeRow(
+                        importRange: vm.importDateRange,
+                        availableRange: availableRange,
+                        sourceRange: preview.sourceDateRange
+                    )
+                } else if let sourceRange = preview.sourceDateRange {
+                    sourceDateRangeRow(sourceRange)
                 }
             }
         }
@@ -349,15 +355,25 @@ struct ContentView: View {
         .cornerRadius(12)
     }
 
-    private func dateRangeRow(range: (min: Date, max: Date)) -> some View {
+    private func dateRangeRow(
+        importRange: (min: Date, max: Date)?,
+        availableRange: (min: Date, max: Date),
+        sourceRange: (min: Date, max: Date)?
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: "calendar")
                     .foregroundStyle(.secondary)
                     .font(.caption)
-                Text(formatDateRange(range.min, range.max))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Group {
+                    if let importRange {
+                        Text("Will import: \(formatDateRange(importRange.min, importRange.max))")
+                    } else {
+                        Text("No new files match the selected dates")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Spacer()
                 if vm.dateFrom != nil || vm.dateTo != nil {
                     Button("Clear") {
@@ -382,9 +398,9 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         DatePicker("", selection: Binding(
-                            get: { vm.dateFrom ?? range.min },
+                            get: { clampedDate(vm.dateFrom ?? availableRange.min, to: availableRange) },
                             set: { vm.dateFrom = $0 }
-                        ), in: range.min...range.max, displayedComponents: .date)
+                        ), in: availableRange.min...availableRange.max, displayedComponents: .date)
                         .datePickerStyle(.compact)
                         .labelsHidden()
                         .controlSize(.small)
@@ -394,16 +410,30 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         DatePicker("", selection: Binding(
-                            get: { vm.dateTo ?? range.max },
+                            get: { clampedDate(vm.dateTo ?? availableRange.max, to: availableRange) },
                             set: { vm.dateTo = $0 }
-                        ), in: range.min...range.max, displayedComponents: .date)
+                        ), in: availableRange.min...availableRange.max, displayedComponents: .date)
                         .datePickerStyle(.compact)
                         .labelsHidden()
                         .controlSize(.small)
                     }
                 }
             }
+
+            if let sourceRange {
+                sourceDateRangeRow(sourceRange)
+            }
         }
+    }
+
+    private func sourceDateRangeRow(_ range: (min: Date, max: Date)) -> some View {
+        Text("Source range: \(formatDateRange(range.min, range.max))")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+    }
+
+    private func clampedDate(_ date: Date, to range: (min: Date, max: Date)) -> Date {
+        min(max(date, range.min), range.max)
     }
 
     // MARK: - Progress section
