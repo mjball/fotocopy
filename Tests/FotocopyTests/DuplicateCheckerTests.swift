@@ -235,6 +235,56 @@ struct DuplicateCheckerTests {
         #expect(await checker.isDuplicate(filename: "known.jpg", size: 200, sourceBucket: DestinationManifest.rootBucket) == true)
     }
 
+    @Test func deletedDestinationFileRemainsDuplicate() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+
+        try createFile(dir, name: "deleted.jpg", size: 100)
+        try await checker.markImported(
+            filename: "deleted.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket,
+            destinationRelativePath: "deleted.jpg",
+            destinationSize: 100
+        )
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("deleted.jpg"))
+
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        #expect(await checker.isDuplicate(
+            filename: "deleted.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket
+        ) == true)
+    }
+
+    @Test func rebuildPreservesDeletedDestinationFileHistory() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+
+        try createFile(dir, name: "deleted.jpg", size: 100)
+        try await checker.markImported(
+            filename: "deleted.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket,
+            destinationRelativePath: "deleted.jpg",
+            destinationSize: 100
+        )
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("deleted.jpg"))
+
+        #expect(try await checker.rebuildManifest(at: dir) == .ready)
+        #expect(await checker.isDuplicate(
+            filename: "deleted.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket
+        ) == true)
+    }
+
     @Test func rebuildManifestPrefersEarliestCompatibleBucket() async throws {
         let dir = try makeTempDir()
         defer { cleanup(dir) }
