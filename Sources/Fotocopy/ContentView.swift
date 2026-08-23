@@ -273,29 +273,27 @@ struct ContentView: View {
                 let counts = vm.filteredCounts
 
                 HStack {
-                    Label("\(counts.total) files", systemImage: "photo.on.rectangle")
-                    Spacer()
-                    Text("\(counts.new) new")
+                    Text("\(counts.new) files ready to import")
                         .foregroundStyle(counts.new > 0 ? .green : .secondary)
+                    Text("from \(preview.files.count) scanned")
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     if counts.duplicates > 0 {
                         Text("\(counts.duplicates) duplicates")
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                extensionChips(preview: preview)
-
-                if !preview.cameraModelCounts.isEmpty {
-                    cameraModelChips(preview: preview)
-                }
-
                 if let availableRange = vm.availableImportDateRange {
                     dateRangeRow(
                         importRange: vm.importDateRange,
-                        availableRange: availableRange,
-                        sourceRange: preview.sourceDateRange
+                        availableRange: availableRange
                     )
-                } else if let sourceRange = preview.sourceDateRange {
+                }
+
+                filterChips(preview: preview)
+
+                if let sourceRange = preview.sourceDateRange {
                     sourceDateRangeRow(sourceRange)
                 }
             }
@@ -306,10 +304,14 @@ struct ContentView: View {
         .cornerRadius(8)
     }
 
-    private func extensionChips(preview: PreviewResult) -> some View {
+    private func filterChips(preview: PreviewResult) -> some View {
         let sortedExts = preview.extensionCounts.sorted { $0.value > $1.value }
+        let sortedModels = preview.cameraModelCounts.sorted { $0.value > $1.value }
 
         return FlowLayout(spacing: 6) {
+            Text("Filters")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             ForEach(sortedExts, id: \.key) { ext, count in
                 let isExcluded = vm.excludedExtensions.contains(ext)
                 Button { vm.toggleExtension(ext) } label: {
@@ -317,14 +319,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             }
-        }
-    }
-
-    private func cameraModelChips(preview: PreviewResult) -> some View {
-        let sorted = preview.cameraModelCounts.sorted { $0.value > $1.value }
-
-        return FlowLayout(spacing: 6) {
-            ForEach(sorted, id: \.key) { model, count in
+            ForEach(sortedModels, id: \.key) { model, count in
                 let isExcluded = vm.excludedCameraModels.contains(model)
                 Button { vm.toggleCameraModel(model) } label: {
                     chipLabel(text: "\(model) \(count)", isExcluded: isExcluded, icon: "camera")
@@ -357,8 +352,7 @@ struct ContentView: View {
 
     private func dateRangeRow(
         importRange: (min: Date, max: Date)?,
-        availableRange: (min: Date, max: Date),
-        sourceRange: (min: Date, max: Date)?
+        availableRange: (min: Date, max: Date)
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -367,7 +361,7 @@ struct ContentView: View {
                     .font(.caption)
                 Group {
                     if let importRange {
-                        Text("Will import: \(formatDateRange(importRange.min, importRange.max))")
+                        Text(formatDateRange(importRange.min, importRange.max))
                     } else {
                         Text("No new files match the selected dates")
                     }
@@ -420,9 +414,6 @@ struct ContentView: View {
                 }
             }
 
-            if let sourceRange {
-                sourceDateRangeRow(sourceRange)
-            }
         }
     }
 
