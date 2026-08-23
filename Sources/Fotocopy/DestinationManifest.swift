@@ -104,7 +104,7 @@ struct ManifestAttention: Sendable, Equatable {
         case .missingManifest:
             return "Build a SQLite manifest for this destination now? Fotocopy will scan the existing imports once, infer source folders for older files when needed, and use that manifest for future duplicate detection."
         case .outOfSync:
-            return "Rebuild the SQLite manifest for this destination now? Fotocopy will rescan the destination, keep known source-folder identities when possible, add unmanaged files, remove entries for missing files, and refresh changed files."
+            return "Rebuild the SQLite manifest for this destination now? Fotocopy will rescan the destination, keep known source-folder identities and history for deleted files, add unmanaged files, and refresh changed files."
         case .corruptManifest:
             return "Rebuild the SQLite manifest for this destination now? Fotocopy will rescan the destination and recreate the manifest from the files on disk."
         }
@@ -271,7 +271,9 @@ struct DestinationManifest {
                 return (relativePath, snapshot.size)
             }
 
-            if !untracked.isEmpty || !missing.isEmpty || !modified.isEmpty {
+            // Missing destination files remain in the manifest as import history. This
+            // prevents a file deleted in Finder from being imported again later.
+            if !untracked.isEmpty || !modified.isEmpty {
                 let attention = ManifestAttention(
                     kind: .outOfSync,
                     destinationFileCount: snapshots.count,
@@ -324,7 +326,7 @@ struct DestinationManifest {
         var rows: [ManifestRow] = []
         rows.reserveCapacity(snapshots.count)
 
-        let preservedRows = existingRowsByPath.values.filter { existingPaths.contains($0.destinationRelativePath) }
+        let preservedRows = Array(existingRowsByPath.values)
         let highestBucketNumber = preservedRows.compactMap { numericBucket(from: $0.sourceBucket) }.max() ?? 99
 
         for snapshot in snapshots {
@@ -342,6 +344,12 @@ struct DestinationManifest {
                 )
             }
         }
+
+        // Retain rows without a matching file as tombstones. They represent files
+        // the user intentionally deleted after Fotocopy imported them.
+        rows.append(contentsOf: preservedRows.filter {
+            !existingPaths.contains($0.destinationRelativePath)
+        })
 
         let unmanaged = snapshots.filter { existingRowsByPath[$0.relativePath] == nil }
         let inferred = try await inferRowsForUnmanagedFiles(
