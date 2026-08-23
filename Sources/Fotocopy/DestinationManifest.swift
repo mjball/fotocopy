@@ -116,6 +116,11 @@ struct ManifestLoadResult {
     let keys: Set<String>
 }
 
+private enum ManifestPresence: String {
+    case present
+    case deletedExternally
+}
+
 private struct ManifestRow {
     let destinationRelativePath: String
     let sourceFilename: String
@@ -123,6 +128,9 @@ private struct ManifestRow {
     let sourceSize: Int
     let destinationSizeLastSeen: Int
     let provenance: String
+    let presence: ManifestPresence
+    let lastSeenAt: TimeInterval
+    let deletedAt: TimeInterval?
 }
 
 private struct DestinationFileSnapshot {
@@ -205,15 +213,21 @@ struct DestinationManifest {
                 source_size,
                 destination_size_last_seen,
                 provenance,
-                imported_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                imported_at,
+                presence,
+                last_seen_at,
+                deleted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(destination_rel_path) DO UPDATE SET
                 source_filename = excluded.source_filename,
                 source_bucket = excluded.source_bucket,
                 source_size = excluded.source_size,
                 destination_size_last_seen = excluded.destination_size_last_seen,
                 provenance = excluded.provenance,
-                imported_at = excluded.imported_at
+                imported_at = excluded.imported_at,
+                presence = excluded.presence,
+                last_seen_at = excluded.last_seen_at,
+                deleted_at = NULL
             """
 
         var stmt: OpaquePointer?
@@ -228,7 +242,11 @@ struct DestinationManifest {
         sqlite3_bind_int64(stmt, 4, sqlite3_int64(sourceSize))
         sqlite3_bind_int64(stmt, 5, sqlite3_int64(destinationSize))
         sqlite3_bind_text(stmt, 6, "actual", -1, SQLITE_TRANSIENT)
-        sqlite3_bind_double(stmt, 7, Date().timeIntervalSince1970)
+        let now = Date().timeIntervalSince1970
+        sqlite3_bind_double(stmt, 7, now)
+        sqlite3_bind_text(stmt, 8, ManifestPresence.present.rawValue, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 9, now)
+        sqlite3_bind_null(stmt, 10)
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw manifestError(db, fallback: "Failed to insert manifest row")
@@ -265,11 +283,23 @@ struct DestinationManifest {
 
             let untracked = snapshotsByPath.keys.filter { rowsByPath[$0] == nil }
             let missing = rowsByPath.keys.filter { snapshotsByPath[$0] == nil }
+            let newlyDeleted = missing.filter {
+                rowsByPath[$0]?.presence != .deletedExternally
+            }
+            let restored = snapshotsByPath.keys.filter {
+                rowsByPath[$0]?.presence == .deletedExternally
+            }
             let modified = snapshotsByPath.compactMap { relativePath, snapshot -> (String, Int)? in
                 guard let row = rowsByPath[relativePath],
                       row.destinationSizeLastSeen != snapshot.size else { return nil }
                 return (relativePath, snapshot.size)
             }
+
+            try updatePresence(
+                in: db,
+                deletedPaths: newlyDeleted,
+                restoredPaths: restored
+            )
 
             // Missing destination files remain in the manifest as import history. This
             // prevents a file deleted in Finder from being imported again later.
@@ -328,6 +358,7 @@ struct DestinationManifest {
 
         let preservedRows = Array(existingRowsByPath.values)
         let highestBucketNumber = preservedRows.compactMap { numericBucket(from: $0.sourceBucket) }.max() ?? 99
+        let now = Date().timeIntervalSince1970
 
         for snapshot in snapshots {
             if let row = existingRowsByPath[snapshot.relativePath] {
@@ -339,16 +370,31 @@ struct DestinationManifest {
                         sourceBucket: row.sourceBucket,
                         sourceSize: refreshedSize,
                         destinationSizeLastSeen: refreshedSize,
-                        provenance: row.provenance
+                        provenance: row.provenance,
+                        presence: .present,
+                        lastSeenAt: now,
+                        deletedAt: nil
                     )
                 )
             }
         }
 
-        // Retain rows without a matching file as tombstones. They represent files
-        // the user intentionally deleted after Fotocopy imported them.
+        // Retain rows without a matching file as explicit tombstones so their
+        // source files remain duplicates even after Finder deletion.
         rows.append(contentsOf: preservedRows.filter {
             !existingPaths.contains($0.destinationRelativePath)
+        }.map { row in
+            ManifestRow(
+                destinationRelativePath: row.destinationRelativePath,
+                sourceFilename: row.sourceFilename,
+                sourceBucket: row.sourceBucket,
+                sourceSize: row.sourceSize,
+                destinationSizeLastSeen: row.destinationSizeLastSeen,
+                provenance: row.provenance,
+                presence: .deletedExternally,
+                lastSeenAt: row.lastSeenAt,
+                deletedAt: row.deletedAt ?? now
+            )
         })
 
         let unmanaged = snapshots.filter { existingRowsByPath[$0.relativePath] == nil }
@@ -423,7 +469,10 @@ struct DestinationManifest {
                     sourceBucket: String(format: "%03d", initialBucket + bucketIndex),
                     sourceSize: candidate.snapshot.size,
                     destinationSizeLastSeen: candidate.snapshot.size,
-                    provenance: "inferred"
+                    provenance: "inferred",
+                    presence: .present,
+                    lastSeenAt: Date().timeIntervalSince1970,
+                    deletedAt: nil
                 )
             )
         }
@@ -433,6 +482,15 @@ struct DestinationManifest {
 
     private func enumerateDestinationFiles() throws -> [DestinationFileSnapshot] {
         let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: destinationURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw NSError(
+                domain: "DestinationManifest",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Destination folder is unavailable"]
+            )
+        }
         guard let enumerator = fm.enumerator(
             at: destinationURL,
             includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .creationDateKey, .contentModificationDateKey],
@@ -443,9 +501,9 @@ struct DestinationManifest {
         var snapshots: [DestinationFileSnapshot] = []
 
         for case let fileURL as URL in enumerator {
-            guard let resourceValues = try? fileURL.resourceValues(
+            let resourceValues = try fileURL.resourceValues(
                 forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .creationDateKey, .contentModificationDateKey]
-            ) else { continue }
+            )
 
             if resourceValues.isDirectory == true {
                 if fileURL.standardizedFileURL.path == metadataPath {
@@ -504,8 +562,11 @@ struct DestinationManifest {
                     source_size,
                     destination_size_last_seen,
                     provenance,
-                    imported_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    imported_at,
+                    presence,
+                    last_seen_at,
+                    deleted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
 
             var stmt: OpaquePointer?
@@ -524,6 +585,13 @@ struct DestinationManifest {
                 sqlite3_bind_int64(stmt, 5, sqlite3_int64(row.destinationSizeLastSeen))
                 sqlite3_bind_text(stmt, 6, row.provenance, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_double(stmt, 7, Date().timeIntervalSince1970)
+                sqlite3_bind_text(stmt, 8, row.presence.rawValue, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmt, 9, row.lastSeenAt)
+                if let deletedAt = row.deletedAt {
+                    sqlite3_bind_double(stmt, 10, deletedAt)
+                } else {
+                    sqlite3_bind_null(stmt, 10)
+                }
 
                 guard sqlite3_step(stmt) == SQLITE_DONE else {
                     throw manifestError(db, fallback: "Failed to insert manifest row")
@@ -545,7 +613,10 @@ struct DestinationManifest {
                 source_bucket,
                 source_size,
                 destination_size_last_seen,
-                provenance
+                provenance,
+                presence,
+                last_seen_at,
+                deleted_at
             FROM imports
             """
 
@@ -560,7 +631,9 @@ struct DestinationManifest {
             guard let destinationPathPtr = sqlite3_column_text(stmt, 0),
                   let sourceFilenamePtr = sqlite3_column_text(stmt, 1),
                   let sourceBucketPtr = sqlite3_column_text(stmt, 2),
-                  let provenancePtr = sqlite3_column_text(stmt, 5) else {
+                  let provenancePtr = sqlite3_column_text(stmt, 5),
+                  let presencePtr = sqlite3_column_text(stmt, 6),
+                  let presence = ManifestPresence(rawValue: String(cString: presencePtr)) else {
                 continue
             }
 
@@ -571,7 +644,12 @@ struct DestinationManifest {
                     sourceBucket: String(cString: sourceBucketPtr),
                     sourceSize: Int(sqlite3_column_int64(stmt, 3)),
                     destinationSizeLastSeen: Int(sqlite3_column_int64(stmt, 4)),
-                    provenance: String(cString: provenancePtr)
+                    provenance: String(cString: provenancePtr),
+                    presence: presence,
+                    lastSeenAt: sqlite3_column_double(stmt, 7),
+                    deletedAt: sqlite3_column_type(stmt, 8) == SQLITE_NULL
+                        ? nil
+                        : sqlite3_column_double(stmt, 8)
                 )
             )
         }
@@ -587,9 +665,99 @@ struct DestinationManifest {
                 source_size INTEGER NOT NULL,
                 destination_size_last_seen INTEGER NOT NULL,
                 provenance TEXT NOT NULL,
-                imported_at REAL NOT NULL
+                imported_at REAL NOT NULL,
+                presence TEXT NOT NULL DEFAULT 'present',
+                last_seen_at REAL NOT NULL,
+                deleted_at REAL
             )
             """, in: db)
+
+        if try !hasColumn(named: "presence", in: db) {
+            try exec("ALTER TABLE imports ADD COLUMN presence TEXT NOT NULL DEFAULT 'present'", in: db)
+        }
+        if try !hasColumn(named: "last_seen_at", in: db) {
+            try exec("ALTER TABLE imports ADD COLUMN last_seen_at REAL", in: db)
+            try exec("UPDATE imports SET last_seen_at = imported_at WHERE last_seen_at IS NULL", in: db)
+        }
+        if try !hasColumn(named: "deleted_at", in: db) {
+            try exec("ALTER TABLE imports ADD COLUMN deleted_at REAL", in: db)
+        }
+    }
+
+    private func updatePresence(
+        in db: OpaquePointer?,
+        deletedPaths: [String],
+        restoredPaths: [String]
+    ) throws {
+        guard !deletedPaths.isEmpty || !restoredPaths.isEmpty else { return }
+
+        let now = Date().timeIntervalSince1970
+        try exec("BEGIN IMMEDIATE TRANSACTION", in: db)
+        do {
+            if !deletedPaths.isEmpty {
+                try updateRows(
+                    in: db,
+                    sql: "UPDATE imports SET presence = ?, deleted_at = ? WHERE destination_rel_path = ?",
+                    paths: deletedPaths
+                ) { stmt, path in
+                    sqlite3_bind_text(stmt, 1, ManifestPresence.deletedExternally.rawValue, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_double(stmt, 2, now)
+                    sqlite3_bind_text(stmt, 3, path, -1, SQLITE_TRANSIENT)
+                }
+            }
+            if !restoredPaths.isEmpty {
+                try updateRows(
+                    in: db,
+                    sql: "UPDATE imports SET presence = ?, last_seen_at = ?, deleted_at = NULL WHERE destination_rel_path = ?",
+                    paths: restoredPaths
+                ) { stmt, path in
+                    sqlite3_bind_text(stmt, 1, ManifestPresence.present.rawValue, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_double(stmt, 2, now)
+                    sqlite3_bind_text(stmt, 3, path, -1, SQLITE_TRANSIENT)
+                }
+            }
+            try exec("COMMIT", in: db)
+        } catch {
+            try? exec("ROLLBACK", in: db)
+            throw error
+        }
+    }
+
+    private func updateRows(
+        in db: OpaquePointer?,
+        sql: String,
+        paths: [String],
+        bind: (OpaquePointer?, String) -> Void
+    ) throws {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw manifestError(db, fallback: "Failed to update manifest presence")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        for path in paths {
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+            bind(stmt, path)
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw manifestError(db, fallback: "Failed to update manifest presence")
+            }
+        }
+    }
+
+    private func hasColumn(named column: String, in db: OpaquePointer?) throws -> Bool {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(imports)", -1, &stmt, nil) == SQLITE_OK else {
+            throw manifestError(db, fallback: "Failed to inspect manifest schema")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let namePtr = sqlite3_column_text(stmt, 1), String(cString: namePtr) == column {
+                return true
+            }
+        }
+        return false
     }
 
     private func openDatabase(at url: URL) throws -> OpaquePointer? {
