@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SQLite3
 @testable import Fotocopy
 
 @Suite
@@ -18,6 +19,61 @@ struct DuplicateCheckerTests {
     private func createFile(_ dir: URL, name: String, size: Int) throws {
         let data = Data(repeating: 0x41, count: size)
         try data.write(to: dir.appendingPathComponent(name))
+    }
+
+    private func manifestState(at dir: URL, relativePath: String) throws -> (presence: String, lastSeenAt: Double, deletedAt: Double?) {
+        let manifest = DestinationManifest(destinationURL: dir)
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(manifest.databaseURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            throw NSError(domain: "DuplicateCheckerTests", code: 1)
+        }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT presence, last_seen_at, deleted_at FROM imports WHERE destination_rel_path = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw NSError(domain: "DuplicateCheckerTests", code: 2)
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, relativePath, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let presencePtr = sqlite3_column_text(stmt, 0) else {
+            throw NSError(domain: "DuplicateCheckerTests", code: 3)
+        }
+
+        return (
+            presence: String(cString: presencePtr),
+            lastSeenAt: sqlite3_column_double(stmt, 1),
+            deletedAt: sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 2)
+        )
+    }
+
+    private func createLegacyManifest(at dir: URL, relativePath: String, size: Int) throws {
+        let manifest = DestinationManifest(destinationURL: dir)
+        try FileManager.default.createDirectory(at: manifest.metadataDirectoryURL, withIntermediateDirectories: true)
+
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(manifest.databaseURL.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            throw NSError(domain: "DuplicateCheckerTests", code: 4)
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+            CREATE TABLE imports (
+                destination_rel_path TEXT PRIMARY KEY,
+                source_filename TEXT NOT NULL,
+                source_bucket TEXT NOT NULL,
+                source_size INTEGER NOT NULL,
+                destination_size_last_seen INTEGER NOT NULL,
+                provenance TEXT NOT NULL,
+                imported_at REAL NOT NULL
+            );
+            INSERT INTO imports VALUES ('\(relativePath)', 'legacy.jpg', 'root', \(size), \(size), 'actual', 123);
+            """
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw NSError(domain: "DuplicateCheckerTests", code: 5)
+        }
     }
 
     @Test func emptyDirectory() async throws {
@@ -53,6 +109,26 @@ struct DuplicateCheckerTests {
             sourceBucket: DestinationManifest.rootBucket
         )
         #expect(result == true)
+    }
+
+    @Test func migratesLegacyManifestToTrackPresence() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        try createFile(dir, name: "legacy.jpg", size: 100)
+        try createLegacyManifest(at: dir, relativePath: "legacy.jpg", size: 100)
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        #expect(await checker.isDuplicate(
+            filename: "legacy.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket
+        ) == true)
+
+        let state = try manifestState(at: dir, relativePath: "legacy.jpg")
+        #expect(state.presence == "present")
+        #expect(state.lastSeenAt == 123)
+        #expect(state.deletedAt == nil)
     }
 
     @Test func differentNameSameSize() async throws {
@@ -250,6 +326,11 @@ struct DuplicateCheckerTests {
             destinationRelativePath: "deleted.jpg",
             destinationSize: 100
         )
+        let importedState = try manifestState(at: dir, relativePath: "deleted.jpg")
+        #expect(importedState.presence == "present")
+        #expect(importedState.lastSeenAt > 0)
+        #expect(importedState.deletedAt == nil)
+
         try FileManager.default.removeItem(at: dir.appendingPathComponent("deleted.jpg"))
 
         #expect(try await checker.buildIndex(at: dir) == .ready)
@@ -258,6 +339,19 @@ struct DuplicateCheckerTests {
             size: 100,
             sourceBucket: DestinationManifest.rootBucket
         ) == true)
+
+        let deletedState = try manifestState(at: dir, relativePath: "deleted.jpg")
+        #expect(deletedState.presence == "deletedExternally")
+        #expect(deletedState.lastSeenAt == importedState.lastSeenAt)
+        #expect(deletedState.deletedAt != nil)
+
+        try createFile(dir, name: "deleted.jpg", size: 100)
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+
+        let restoredState = try manifestState(at: dir, relativePath: "deleted.jpg")
+        #expect(restoredState.presence == "present")
+        #expect(restoredState.deletedAt == nil)
+        #expect(restoredState.lastSeenAt >= importedState.lastSeenAt)
     }
 
     @Test func rebuildPreservesDeletedDestinationFileHistory() async throws {
