@@ -52,6 +52,14 @@ final class ImportViewModel {
         previewResult?.filteredCounts(by: activeFilter) ?? (0, 0, 0)
     }
 
+    var importDateRange: (min: Date, max: Date)? {
+        previewResult?.importDateRange(by: activeFilter)
+    }
+
+    var availableImportDateRange: (min: Date, max: Date)? {
+        previewResult?.availableImportDateRange(by: activeFilter)
+    }
+
     var importDisabledReason: String? {
         if sourcePath.isEmpty || destinationPath.isEmpty {
             return "Select source and destination folders"

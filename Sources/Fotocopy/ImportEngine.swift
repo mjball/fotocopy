@@ -85,7 +85,22 @@ struct PreviewResult: Sendable {
         return counts
     }
 
-    var dateRange: (min: Date, max: Date)? {
+    var sourceDateRange: (min: Date, max: Date)? {
+        dateRange(for: files)
+    }
+
+    func importDateRange(by filter: ImportFilter) -> (min: Date, max: Date)? {
+        dateRange(for: files.filter { !$0.isDuplicate && filter.includes($0) })
+    }
+
+    func availableImportDateRange(by filter: ImportFilter) -> (min: Date, max: Date)? {
+        var filterWithoutDates = filter
+        filterWithoutDates.dateFrom = nil
+        filterWithoutDates.dateTo = nil
+        return importDateRange(by: filterWithoutDates)
+    }
+
+    private func dateRange(for files: [PreviewFile]) -> (min: Date, max: Date)? {
         let dates = files.compactMap(\.date)
         guard let min = dates.min(), let max = dates.max() else { return nil }
         return (min, max)
