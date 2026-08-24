@@ -21,7 +21,7 @@ struct DuplicateCheckerTests {
         try data.write(to: dir.appendingPathComponent(name))
     }
 
-    private func manifestState(at dir: URL, relativePath: String) throws -> (presence: String, lastSeenAt: Double, deletedAt: Double?) {
+    private func manifestState(at dir: URL, relativePath: String) throws -> (sourceBucket: String, presence: String, lastSeenAt: Double, deletedAt: Double?) {
         let manifest = DestinationManifest(destinationURL: dir)
         var db: OpaquePointer?
         guard sqlite3_open_v2(manifest.databaseURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
@@ -30,7 +30,7 @@ struct DuplicateCheckerTests {
         defer { sqlite3_close(db) }
 
         var stmt: OpaquePointer?
-        let sql = "SELECT presence, last_seen_at, deleted_at FROM imports WHERE destination_rel_path = ?"
+        let sql = "SELECT source_bucket, presence, last_seen_at, deleted_at FROM imports WHERE destination_rel_path = ?"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw NSError(domain: "DuplicateCheckerTests", code: 2)
         }
@@ -38,14 +38,16 @@ struct DuplicateCheckerTests {
         sqlite3_bind_text(stmt, 1, relativePath, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
 
         guard sqlite3_step(stmt) == SQLITE_ROW,
-              let presencePtr = sqlite3_column_text(stmt, 0) else {
+              let sourceBucketPtr = sqlite3_column_text(stmt, 0),
+              let presencePtr = sqlite3_column_text(stmt, 1) else {
             throw NSError(domain: "DuplicateCheckerTests", code: 3)
         }
 
         return (
+            sourceBucket: String(cString: sourceBucketPtr),
             presence: String(cString: presencePtr),
-            lastSeenAt: sqlite3_column_double(stmt, 1),
-            deletedAt: sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 2)
+            lastSeenAt: sqlite3_column_double(stmt, 2),
+            deletedAt: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 3)
         )
     }
 
@@ -426,6 +428,124 @@ struct DuplicateCheckerTests {
                 destinationFileCount: 2,
                 untrackedFileCount: 1,
                 missingFileCount: 0,
+                modifiedFileCount: 0,
+                details: nil
+            )
+        ))
+    }
+
+    @Test func automaticallyReconcilesFinderMoveWithinDateBucket() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let dateRoot = dir
+            .appendingPathComponent("2026")
+            .appendingPathComponent("08")
+            .appendingPathComponent("22")
+        let originalURL = dateRoot.appendingPathComponent("BL5A2471.CR3")
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        try FileManager.default.createDirectory(at: dateRoot, withIntermediateDirectories: true)
+        try createFile(dateRoot, name: "BL5A2471.CR3", size: 100)
+
+        try await checker.markImported(
+            filename: "BL5A2471.CR3",
+            size: 100,
+            sourceBucket: "camera-card-1",
+            destinationRelativePath: "2026/08/22/BL5A2471.CR3",
+            destinationSize: 100
+        )
+
+        let selects = dateRoot.appendingPathComponent("Selects")
+        try FileManager.default.createDirectory(at: selects, withIntermediateDirectories: true)
+        let movedURL = selects.appendingPathComponent("BL5A2471.CR3")
+        try FileManager.default.moveItem(at: originalURL, to: movedURL)
+
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        #expect(await checker.isDuplicate(
+            filename: "BL5A2471.CR3",
+            size: 100,
+            sourceBucket: "camera-card-1"
+        ))
+
+        let state = try manifestState(at: dir, relativePath: "2026/08/22/Selects/BL5A2471.CR3")
+        #expect(state.sourceBucket == "camera-card-1")
+        #expect(state.presence == "present")
+        #expect(state.deletedAt == nil)
+    }
+
+    @Test func automaticallyReconcilesFinderMoveToAnySubfolderInDateBucket() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let dateRoot = dir
+            .appendingPathComponent("2026")
+            .appendingPathComponent("08")
+            .appendingPathComponent("22")
+        let originalURL = dateRoot.appendingPathComponent("BL5A2471.CR3")
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        try FileManager.default.createDirectory(at: dateRoot, withIntermediateDirectories: true)
+        try createFile(dateRoot, name: "BL5A2471.CR3", size: 100)
+
+        try await checker.markImported(
+            filename: "BL5A2471.CR3",
+            size: 100,
+            sourceBucket: "camera-card-1",
+            destinationRelativePath: "2026/08/22/BL5A2471.CR3",
+            destinationSize: 100
+        )
+
+        let alternate = dateRoot
+            .appendingPathComponent("Favorites")
+            .appendingPathComponent("Birds")
+        let movedURL = alternate.appendingPathComponent("BL5A2471.CR3")
+        try FileManager.default.createDirectory(at: alternate, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: originalURL, to: movedURL)
+
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        let state = try manifestState(at: dir, relativePath: "2026/08/22/Favorites/Birds/BL5A2471.CR3")
+        #expect(state.sourceBucket == "camera-card-1")
+        #expect(state.presence == "present")
+    }
+
+    @Test func doesNotReconcileFinderMoveAcrossDateBuckets() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let originalDateRoot = dir
+            .appendingPathComponent("2026")
+            .appendingPathComponent("08")
+            .appendingPathComponent("22")
+        let originalURL = originalDateRoot.appendingPathComponent("BL5A2471.CR3")
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        try FileManager.default.createDirectory(at: originalDateRoot, withIntermediateDirectories: true)
+        try createFile(originalDateRoot, name: "BL5A2471.CR3", size: 100)
+        try await checker.markImported(
+            filename: "BL5A2471.CR3",
+            size: 100,
+            sourceBucket: "camera-card-1",
+            destinationRelativePath: "2026/08/22/BL5A2471.CR3",
+            destinationSize: 100
+        )
+
+        let otherDateRoot = dir
+            .appendingPathComponent("2026")
+            .appendingPathComponent("08")
+            .appendingPathComponent("23")
+        try FileManager.default.createDirectory(at: otherDateRoot, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: originalURL, to: otherDateRoot.appendingPathComponent("BL5A2471.CR3"))
+
+        #expect(try await checker.buildIndex(at: dir) == .requiresUserAction(
+            ManifestAttention(
+                kind: .outOfSync,
+                destinationFileCount: 1,
+                untrackedFileCount: 1,
+                missingFileCount: 1,
                 modifiedFileCount: 0,
                 details: nil
             )

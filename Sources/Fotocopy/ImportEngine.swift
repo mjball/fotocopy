@@ -381,7 +381,10 @@ actor ImportEngine {
         guard didSucceed else { return }
 
         await MainActor.run {
-            progress.recordSuccessfulTransfer(bytes: file.size)
+            progress.recordSuccessfulTransfer(
+                bytes: file.size,
+                destinationFolderPath: destDir.path
+            )
         }
     }
 

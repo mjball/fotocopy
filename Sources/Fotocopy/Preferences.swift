@@ -6,6 +6,7 @@ enum TransferMode: String, CaseIterable {
 }
 
 enum PreferenceKeys {
+    static let activeWorkspace = "activeWorkspace"
     static let sourcePath = "sourcePath"
     static let destinationPath = "destinationPath"
     static let transferMode = "transferMode"
@@ -15,6 +16,8 @@ enum PreferenceKeys {
     static let ejectDestination = "ejectDestination"
     static let excludedExtensions = "excludedExtensions"
     static let excludedCameraModels = "excludedCameraModels"
+    static let recentCullFolders = "recentCullFolders"
+    static let lastCullFolder = "lastCullFolder"
 }
 
 struct ImportFilter: Sendable {
