@@ -28,8 +28,9 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
     }
 }
 
-/// One selection type lets the native sidebar highlight both app workspaces
-/// and the burst currently under review without introducing nested split views.
+/// Import is a peer workspace; an individual burst is the selectable leaf
+/// within Cull. The Cull workspace itself is intentionally not a competing
+/// sidebar selection when one of its bursts is active.
 enum FotocopySidebarDestination: Hashable {
     case workspace(FotocopyWorkspace)
     case burst(URL)
@@ -57,7 +58,7 @@ struct FotocopyShellView: View {
         .onAppear {
             CullApplicationLifecycle.activeModel = cullModel
             if sidebarSelection == nil {
-                sidebarSelection = .workspace(workspace)
+                synchronizeSidebarSelectionWithWorkspace()
             }
         }
         .onChange(of: sidebarSelection) { _, selection in
@@ -81,7 +82,7 @@ struct FotocopyShellView: View {
             cullModel.requestLeavingCull(
                 onContinue: {
                     workspace = currentWorkspace
-                    sidebarSelection = .workspace(currentWorkspace)
+                    synchronizeSidebarSelectionWithWorkspace()
                 },
                 onCancel: {
                     sidebarSelection = currentCullSidebarDestination
@@ -99,8 +100,11 @@ struct FotocopyShellView: View {
             Section("Workspaces") {
                 Label(FotocopyWorkspace.importPhotos.title, systemImage: FotocopyWorkspace.importPhotos.symbolName)
                     .tag(FotocopySidebarDestination.workspace(.importPhotos))
-                Label(FotocopyWorkspace.cullBursts.title, systemImage: FotocopyWorkspace.cullBursts.symbolName)
-                    .tag(FotocopySidebarDestination.workspace(.cullBursts))
+                Button(action: activateCull) {
+                    Label(FotocopyWorkspace.cullBursts.title, systemImage: FotocopyWorkspace.cullBursts.symbolName)
+                        .font(workspace == .cullBursts ? .body.weight(.semibold) : .body)
+                }
+                .buttonStyle(.plain)
             }
 
             if workspace == .cullBursts {
@@ -126,8 +130,8 @@ struct FotocopyShellView: View {
 
         switch selection {
         case .workspace(let selectedWorkspace):
+            guard selectedWorkspace == .importPhotos else { return }
             guard workspace == .cullBursts,
-                  selectedWorkspace != .cullBursts,
                   cullModel.hasPendingCullChanges else {
                 workspace = selectedWorkspace
                 return
@@ -137,7 +141,7 @@ struct FotocopyShellView: View {
             cullModel.requestLeavingCull(
                 onContinue: {
                     workspace = selectedWorkspace
-                    sidebarSelection = .workspace(selectedWorkspace)
+                    synchronizeSidebarSelectionWithWorkspace()
                 },
                 onCancel: {
                     sidebarSelection = currentCullSidebarDestination
@@ -156,13 +160,17 @@ struct FotocopyShellView: View {
             sidebarSelection = .burst(burstID)
             return
         }
-        sidebarSelection = .workspace(storedWorkspace)
+        sidebarSelection = storedWorkspace == .importPhotos
+            ? .workspace(.importPhotos)
+            : nil
     }
 
-    private var currentCullSidebarDestination: FotocopySidebarDestination {
-        if let burstID = cullModel.selectedBurstID {
-            return .burst(burstID)
-        }
-        return .workspace(.cullBursts)
+    private var currentCullSidebarDestination: FotocopySidebarDestination? {
+        cullModel.selectedBurstID.map(FotocopySidebarDestination.burst)
+    }
+
+    private func activateCull() {
+        guard workspace != .cullBursts else { return }
+        workspace = .cullBursts
     }
 }

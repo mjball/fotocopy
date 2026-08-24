@@ -97,7 +97,7 @@ struct CullSidebarSections: View {
     @Bindable var model: CullViewModel
 
     var body: some View {
-        Section("Burst Cull") {
+        Section("Cull") {
             if let folder = model.folderURL {
                 Label(folder.path, systemImage: "folder")
                     .lineLimit(2)
