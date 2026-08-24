@@ -19,7 +19,7 @@ struct ContentView: View {
             pathSection
             modeSection
             if !vm.progress.isComplete {
-                if vm.isPreviewing || vm.isRebuildingManifest || vm.manifestAttention != nil || vm.previewResult != nil || vm.previewError != nil {
+                if vm.isPreviewing || vm.isRebuildingManifest || vm.manifestAttention != nil || vm.sourceAvailability != nil || vm.previewResult != nil || vm.previewError != nil {
                     previewSection
                 }
                 actionSection
@@ -39,15 +39,17 @@ struct ContentView: View {
         .onChange(of: excludedExtensionsRaw) { _, new in vm.excludedExtensionsRaw = new }
         .onChange(of: excludedCameraModelsRaw) { _, new in vm.excludedCameraModelsRaw = new }
         .onChange(of: transferMode) { _, new in vm.transferMode = new }
-        .onChange(of: volumeWatcher.lastMounted?.path) { _, _ in
-            if let mounted = volumeWatcher.lastMounted {
-                if mounted.role == "source" {
+        .onChange(of: volumeWatcher.lastMounted) { _, mountedVolumes in
+            guard !mountedVolumes.isEmpty else { return }
+            for mounted in mountedVolumes {
+                switch mounted.role {
+                case .source:
                     sourcePath = mounted.path
-                } else if mounted.role == "destination" {
+                case .destination:
                     destinationPath = mounted.path
                 }
-                NSApp.activate(ignoringOtherApps: true)
             }
+            NSApp.activate(ignoringOtherApps: true)
         }
         .onAppear {
             vm.sourcePath = sourcePath
@@ -74,14 +76,20 @@ struct ContentView: View {
     }
 
     private func updateVolumeWatching() {
-        var volumes: [(name: String, role: String)] = []
-        if autoOpenSource, let name = VolumeWatcher.volumeName(from: sourcePath) {
-            volumes.append((name: name, role: "source"))
+        var bindings: [VolumeBinding] = []
+        if autoOpenSource, let binding = volumeBinding(role: .source, configuredPath: sourcePath) {
+            bindings.append(binding)
         }
-        if autoOpenDestination, let name = VolumeWatcher.volumeName(from: destinationPath) {
-            volumes.append((name: name, role: "destination"))
+        if autoOpenDestination, let binding = volumeBinding(role: .destination, configuredPath: destinationPath) {
+            bindings.append(binding)
         }
-        volumeWatcher.startWatching(volumes: volumes)
+        volumeWatcher.startWatching(bindings: bindings)
+    }
+
+    private func volumeBinding(role: VolumeRole, configuredPath: String) -> VolumeBinding? {
+        guard let binding = VolumeBinding(role: role, configuredPath: configuredPath) else { return nil }
+        let logicalName = VolumeWatcher.logicalVolumeName(at: binding.mountRootPath)
+        return VolumeBinding(role: role, configuredPath: configuredPath, volumeName: logicalName)
     }
 
     // MARK: - Path section
@@ -206,7 +214,11 @@ struct ContentView: View {
 
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if vm.isPreviewing {
+            if let sourceAvailability = vm.sourceAvailability {
+                Label(sourceAvailability.message ?? "Source folder is not available", systemImage: "externaldrive.badge.questionmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if vm.isPreviewing {
                 VStack(alignment: .leading, spacing: 6) {
                     if vm.scanTotal > 0 {
                         ProgressView(value: Double(vm.scanScanned), total: Double(vm.scanTotal)) {
