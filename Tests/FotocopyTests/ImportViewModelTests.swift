@@ -6,6 +6,62 @@ import Foundation
 @MainActor
 struct ImportViewModelTests {
 
+    @Test func unavailableSourceVolumeIsReportedBeforeDestinationValidation() {
+        let volumeName = "FotocopyTests-Not-Mounted"
+        let vm = ImportViewModel()
+        vm.sourcePath = "/Volumes/\(volumeName)/DCIM"
+        vm.destinationPath = "/Volumes/BAR/Fotocopy"
+        vm.runPreview()
+
+        #expect(vm.sourceAvailability == .volumeNotMounted(name: volumeName))
+        #expect(vm.manifestAttention == nil)
+        #expect(vm.isPreviewing == false)
+        #expect(vm.importDisabledReason == "Source volume \(volumeName) is not mounted")
+    }
+
+    @Test func sourceVolumeAvailabilityRecoversWhenMountAndFolderArePresent() {
+        let sourcePath = "/Volumes/EOS_CF/DCIM"
+        let unavailable = ImportViewModel.sourceAvailability(for: sourcePath) { _ in false }
+        let available = ImportViewModel.sourceAvailability(for: sourcePath) { path in
+            path == "/Volumes/EOS_CF" || path == sourcePath
+        }
+
+        #expect(unavailable == .volumeNotMounted(name: "EOS_CF"))
+        #expect(available == .available)
+    }
+
+    @Test func stalePreviewCannotPublishManifestAttentionForPreviousDestination() {
+        let vm = ImportViewModel()
+        vm.sourcePath = "/Volumes/CARD/DCIM"
+        vm.destinationPath = "/Volumes/BAR"
+        vm.runPreview()
+        let staleRequest = PreviewRequest(
+            generation: vm.previewGeneration,
+            sourcePath: vm.sourcePath,
+            destinationPath: vm.destinationPath
+        )
+
+        vm.destinationPath = "/Volumes/BAR/Fotocopy"
+        vm.runPreview()
+
+        let rootAttention = ManifestAttention(
+            kind: .missingManifest,
+            destinationFileCount: 17_966,
+            untrackedFileCount: 17_966,
+            missingFileCount: 0,
+            modifiedFileCount: 0,
+            details: nil
+        )
+        let accepted = vm.applyDestinationIndexStatus(
+            .requiresUserAction(rootAttention),
+            for: staleRequest
+        )
+
+        #expect(accepted == false)
+        #expect(vm.manifestAttention == nil)
+        vm.cancelPreview()
+    }
+
     // MARK: - importDisabledReason
 
     @Test func disabledWhenPathsEmpty() {

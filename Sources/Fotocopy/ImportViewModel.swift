@@ -1,6 +1,29 @@
 import Foundation
 import AppKit
 
+struct PreviewRequest: Equatable {
+    let generation: Int
+    let sourcePath: String
+    let destinationPath: String
+}
+
+enum SourcePathAvailability: Equatable {
+    case available
+    case volumeNotMounted(name: String)
+    case folderUnavailable
+
+    var message: String? {
+        switch self {
+        case .available:
+            return nil
+        case let .volumeNotMounted(name):
+            return "Source volume \(name) is not mounted"
+        case .folderUnavailable:
+            return "Source folder is not available"
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class ImportViewModel {
@@ -17,6 +40,7 @@ final class ImportViewModel {
     var scanTotal = 0
     var previewError: String?
     var manifestAttention: ManifestAttention?
+    var sourceAvailability: SourcePathAvailability?
     var dateFrom: Date?
     var dateTo: Date?
     var showDateFilter = false
@@ -25,6 +49,7 @@ final class ImportViewModel {
     private var importTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var sourceScanCache: SourceScanCache?
+    private(set) var previewGeneration = 0
 
     var excludedExtensions: Set<String> {
         Set(excludedExtensionsRaw.split(separator: ",").map { String($0) })
@@ -63,6 +88,9 @@ final class ImportViewModel {
     var importDisabledReason: String? {
         if sourcePath.isEmpty || destinationPath.isEmpty {
             return "Select source and destination folders"
+        }
+        if let sourceAvailability {
+            return sourceAvailability.message
         }
         if isRebuildingManifest {
             return "Destination manifest rebuild in progress..."
@@ -115,10 +143,12 @@ final class ImportViewModel {
     func cancelPreview() {
         previewTask?.cancel()
         previewTask = nil
+        previewGeneration &+= 1
         isPreviewing = false
         previewResult = nil
         previewError = nil
         manifestAttention = nil
+        sourceAvailability = nil
         scanScanned = 0
         scanTotal = 0
     }
@@ -139,14 +169,29 @@ final class ImportViewModel {
         guard !sourcePath.isEmpty, !destinationPath.isEmpty else { return }
         guard !progress.isImporting, !progress.isComplete else { return }
 
+        let availability = Self.sourceAvailability(
+            for: sourcePath,
+            fileExists: FileManager.default.fileExists(atPath:)
+        )
+        guard availability == .available else {
+            sourceAvailability = availability
+            return
+        }
+
         isPreviewing = true
         scanScanned = 0
         scanTotal = 0
         previewError = nil
         manifestAttention = nil
+        sourceAvailability = nil
         let src = URL(fileURLWithPath: sourcePath)
         let dst = URL(fileURLWithPath: destinationPath)
         let cachedSource = sourceScanCache
+        let request = PreviewRequest(
+            generation: previewGeneration,
+            sourcePath: sourcePath,
+            destinationPath: destinationPath
+        )
 
         previewTask = Task {
             let engine = ImportEngine()
@@ -154,18 +199,11 @@ final class ImportViewModel {
 
             do {
                 let indexStatus = try await checker.buildIndex(at: dst)
-                if case let .requiresUserAction(attention) = indexStatus {
-                    manifestAttention = attention
-                    previewResult = nil
-                    isPreviewing = false
-                    scanScanned = 0
-                    scanTotal = 0
-                    return
-                }
+                guard applyDestinationIndexStatus(indexStatus, for: request) else { return }
 
                 let sourceFiles: [SourceFile]
 
-                if let cachedSource, cachedSource.matches(path: sourcePath) {
+                if let cachedSource, cachedSource.matches(path: request.sourcePath) {
                     sourceFiles = cachedSource.files
                 } else {
                     let resolver = PhotosLibraryResolver.resolve(for: src)
@@ -173,38 +211,70 @@ final class ImportViewModel {
                         source: src, resolver: resolver,
                         onProgress: { [weak self] scanned, total in
                             Task { @MainActor in
-                                self?.scanScanned = scanned
-                                self?.scanTotal = total
+                                guard let self, self.isPreviewRequestCurrent(request) else { return }
+                                self.scanScanned = scanned
+                                self.scanTotal = total
                             }
                         }
                     )
-                    if !Task.isCancelled {
-                        await MainActor.run {
-                            self.sourceScanCache = SourceScanCache(
-                                sourcePath: self.sourcePath,
-                                files: sourceFiles,
-                                timestamp: Date()
-                            )
-                        }
-                    }
+                    guard isPreviewRequestCurrent(request) else { return }
+                    sourceScanCache = SourceScanCache(
+                        sourcePath: request.sourcePath,
+                        files: sourceFiles,
+                        timestamp: Date()
+                    )
                 }
 
                 let preview = await engine.checkDuplicates(
                     sourceFiles: sourceFiles, duplicateChecker: checker
                 )
-                if !Task.isCancelled {
-                    previewResult = preview
-                }
+                guard isPreviewRequestCurrent(request) else { return }
+                previewResult = preview
             } catch {
-                if !Task.isCancelled {
-                    previewError = error.localizedDescription
-                }
+                guard isPreviewRequestCurrent(request) else { return }
+                previewError = error.localizedDescription
             }
 
+            guard isPreviewRequestCurrent(request) else { return }
             isPreviewing = false
             scanScanned = 0
             scanTotal = 0
         }
+    }
+
+    func isPreviewRequestCurrent(_ request: PreviewRequest) -> Bool {
+        !Task.isCancelled &&
+            request.generation == previewGeneration &&
+            request.sourcePath == sourcePath &&
+            request.destinationPath == destinationPath
+    }
+
+    static func sourceAvailability(
+        for sourcePath: String,
+        fileExists: (String) -> Bool
+    ) -> SourcePathAvailability {
+        if let binding = VolumeBinding(role: .source, configuredPath: sourcePath),
+           !fileExists(binding.mountRootPath) {
+            return .volumeNotMounted(name: binding.volumeName)
+        }
+        return fileExists(sourcePath) ? .available : .folderUnavailable
+    }
+
+    /// Returns false when the preview has been cancelled, superseded, or needs user action.
+    @discardableResult
+    func applyDestinationIndexStatus(
+        _ indexStatus: DestinationIndexStatus,
+        for request: PreviewRequest
+    ) -> Bool {
+        guard isPreviewRequestCurrent(request) else { return false }
+        guard case let .requiresUserAction(attention) = indexStatus else { return true }
+
+        manifestAttention = attention
+        previewResult = nil
+        isPreviewing = false
+        scanScanned = 0
+        scanTotal = 0
+        return false
     }
 
     func checkDiskSpace() -> String? {
