@@ -55,6 +55,7 @@ struct FotocopyShellView: View {
         }
         .navigationTitle(workspace.windowTitle)
         .onAppear {
+            CullApplicationLifecycle.activeModel = cullModel
             if sidebarSelection == nil {
                 sidebarSelection = .workspace(workspace)
             }
@@ -62,8 +63,30 @@ struct FotocopyShellView: View {
         .onChange(of: sidebarSelection) { _, selection in
             applySidebarSelection(selection)
         }
-        .onChange(of: workspaceRaw) { _, _ in
-            synchronizeSidebarSelectionWithWorkspace()
+        .onChange(of: workspaceRaw) { previousRawValue, currentRawValue in
+            guard let previousWorkspace = FotocopyWorkspace(rawValue: previousRawValue),
+                  let currentWorkspace = FotocopyWorkspace(rawValue: currentRawValue),
+                  previousWorkspace == .cullBursts,
+                  currentWorkspace != .cullBursts,
+                  cullModel.hasPendingCullChanges else {
+                synchronizeSidebarSelectionWithWorkspace()
+                return
+            }
+
+            // App menu commands write the workspace preference directly. Put
+            // the UI back on Cull before offering the same Apply/Discard/Cancel
+            // choice used by the sidebar.
+            workspace = previousWorkspace
+            sidebarSelection = currentCullSidebarDestination
+            cullModel.requestLeavingCull(
+                onContinue: {
+                    workspace = currentWorkspace
+                    sidebarSelection = .workspace(currentWorkspace)
+                },
+                onCancel: {
+                    sidebarSelection = currentCullSidebarDestination
+                }
+            )
         }
         .onChange(of: cullModel.selectedBurstID) { _, burstID in
             guard workspace == .cullBursts, let burstID else { return }
@@ -103,7 +126,23 @@ struct FotocopyShellView: View {
 
         switch selection {
         case .workspace(let selectedWorkspace):
-            workspace = selectedWorkspace
+            guard workspace == .cullBursts,
+                  selectedWorkspace != .cullBursts,
+                  cullModel.hasPendingCullChanges else {
+                workspace = selectedWorkspace
+                return
+            }
+
+            sidebarSelection = currentCullSidebarDestination
+            cullModel.requestLeavingCull(
+                onContinue: {
+                    workspace = selectedWorkspace
+                    sidebarSelection = .workspace(selectedWorkspace)
+                },
+                onCancel: {
+                    sidebarSelection = currentCullSidebarDestination
+                }
+            )
         case .burst(let burstID):
             workspace = .cullBursts
             cullModel.selectedBurstID = burstID
@@ -118,5 +157,12 @@ struct FotocopyShellView: View {
             return
         }
         sidebarSelection = .workspace(storedWorkspace)
+    }
+
+    private var currentCullSidebarDestination: FotocopySidebarDestination {
+        if let burstID = cullModel.selectedBurstID {
+            return .burst(burstID)
+        }
+        return .workspace(.cullBursts)
     }
 }

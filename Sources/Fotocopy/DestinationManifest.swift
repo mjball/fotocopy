@@ -116,6 +116,12 @@ struct ManifestLoadResult {
     let keys: Set<String>
 }
 
+struct DestinationManifestRelocation: Sendable, Hashable {
+    let previousRelativePath: String
+    let currentRelativePath: String
+    let destinationSize: Int
+}
+
 private enum ManifestPresence: String {
     case present
     case deletedExternally
@@ -180,6 +186,31 @@ struct DestinationManifest {
 
     var databaseURL: URL {
         metadataDirectoryURL.appendingPathComponent(Self.databaseFilename)
+    }
+
+    /// Finds the nearest Fotocopy destination root that already owns a
+    /// manifest. Cull uses this before moving files so an applied decision can
+    /// update the same manifest immediately instead of waiting for a later
+    /// import scan to reconcile it.
+    static func existingManifestRoot(containing folderURL: URL) -> URL? {
+        let fm = FileManager.default
+        var candidate = folderURL.standardizedFileURL
+
+        while true {
+            let databaseURL = candidate
+                .appendingPathComponent(metadataDirectoryName, isDirectory: true)
+                .appendingPathComponent(databaseFilename)
+            if fm.fileExists(atPath: databaseURL.path) {
+                return candidate
+            }
+
+            let parent = candidate.deletingLastPathComponent().standardizedFileURL
+            // Foundation can represent the root as both `/` and `/.`; using
+            // path length as well prevents those equivalent spellings from
+            // making this ancestor walk cycle forever.
+            guard parent.path.count < candidate.path.count else { return nil }
+            candidate = parent
+        }
     }
 
     func loadIndex() throws -> DestinationIndexStatus {
@@ -263,6 +294,74 @@ struct DestinationManifest {
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw manifestError(db, fallback: "Failed to insert manifest row")
+        }
+    }
+
+    func validateRelocations(_ relocations: [DestinationManifestRelocation]) throws {
+        guard !relocations.isEmpty else { return }
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw NSError(
+                domain: "DestinationManifest",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Fotocopy's destination manifest is unavailable"]
+            )
+        }
+
+        let db = try openDatabase(at: databaseURL)
+        defer { sqlite3_close(db) }
+        try ensureSchema(in: db)
+        try validateRelocations(relocations, in: db)
+    }
+
+    func recordRelocations(_ relocations: [DestinationManifestRelocation]) throws {
+        guard !relocations.isEmpty else { return }
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw NSError(
+                domain: "DestinationManifest",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Fotocopy's destination manifest is unavailable"]
+            )
+        }
+
+        let db = try openDatabase(at: databaseURL)
+        defer { sqlite3_close(db) }
+        try ensureSchema(in: db)
+
+        let sql = """
+            UPDATE imports
+            SET destination_rel_path = ?,
+                destination_size_last_seen = ?,
+                presence = ?,
+                last_seen_at = ?,
+                deleted_at = NULL
+            WHERE destination_rel_path = ?
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw manifestError(db, fallback: "Failed to prepare manifest relocation")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        let now = Date().timeIntervalSince1970
+        try exec("BEGIN IMMEDIATE TRANSACTION", in: db)
+        do {
+            try validateRelocations(relocations, in: db)
+            for relocation in relocations {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                sqlite3_bind_text(stmt, 1, relocation.currentRelativePath, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int64(stmt, 2, sqlite3_int64(relocation.destinationSize))
+                sqlite3_bind_text(stmt, 3, ManifestPresence.present.rawValue, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmt, 4, now)
+                sqlite3_bind_text(stmt, 5, relocation.previousRelativePath, -1, SQLITE_TRANSIENT)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw manifestError(db, fallback: "Failed to record manifest relocation")
+                }
+            }
+            try exec("COMMIT", in: db)
+        } catch {
+            try? exec("ROLLBACK", in: db)
+            throw error
         }
     }
 
@@ -890,6 +989,61 @@ struct DestinationManifest {
             bind(stmt, path)
             guard sqlite3_step(stmt) == SQLITE_DONE else {
                 throw manifestError(db, fallback: "Failed to update manifest presence")
+            }
+        }
+    }
+
+    private func validateRelocations(
+        _ relocations: [DestinationManifestRelocation],
+        in db: OpaquePointer?
+    ) throws {
+        var sourceStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT 1 FROM imports WHERE destination_rel_path = ?",
+            -1,
+            &sourceStatement,
+            nil
+        ) == SQLITE_OK else {
+            throw manifestError(db, fallback: "Failed to validate manifest relocation source")
+        }
+        defer { sqlite3_finalize(sourceStatement) }
+
+        var destinationStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT 1 FROM imports WHERE destination_rel_path = ?",
+            -1,
+            &destinationStatement,
+            nil
+        ) == SQLITE_OK else {
+            throw manifestError(db, fallback: "Failed to validate manifest relocation destination")
+        }
+        defer { sqlite3_finalize(destinationStatement) }
+
+        for relocation in relocations {
+            guard relocation.previousRelativePath != relocation.currentRelativePath else { continue }
+
+            sqlite3_reset(sourceStatement)
+            sqlite3_clear_bindings(sourceStatement)
+            sqlite3_bind_text(sourceStatement, 1, relocation.previousRelativePath, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(sourceStatement) == SQLITE_ROW else {
+                throw NSError(
+                    domain: "DestinationManifest",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Fotocopy has no manifest entry for \(relocation.previousRelativePath). Rebuild the destination manifest before applying this cull decision."]
+                )
+            }
+
+            sqlite3_reset(destinationStatement)
+            sqlite3_clear_bindings(destinationStatement)
+            sqlite3_bind_text(destinationStatement, 1, relocation.currentRelativePath, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(destinationStatement) != SQLITE_ROW else {
+                throw NSError(
+                    domain: "DestinationManifest",
+                    code: 6,
+                    userInfo: [NSLocalizedDescriptionKey: "The destination path \(relocation.currentRelativePath) is already recorded in Fotocopy's manifest."]
+                )
             }
         }
     }

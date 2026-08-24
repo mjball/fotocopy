@@ -14,20 +14,21 @@ struct CullWorkspaceView: View {
                         Text("No completed Fotocopy import yet")
                     } else {
                         ForEach(model.recentImportedFolders, id: \.path) { folder in
-                            Button(folder.path) { model.use(folder: folder) }
+                            Button(folder.path) { model.requestUse(folder: folder) }
                         }
                     }
                 }
-                .disabled(model.isScanning)
+                    .disabled(model.isScanning || model.isApplying)
 
                 Button("Choose Folder…") { model.chooseFolder() }
                     .keyboardShortcut("o", modifiers: .command)
-                    .disabled(model.isScanning)
+                    .disabled(model.isScanning || model.isApplying)
 
                 if model.isScanning {
                     Button("Cancel") { model.cancel() }
                 } else if model.folderURL != nil {
                     Button("Scan Again") { model.scan() }
+                        .disabled(model.isApplying)
                 }
             }
         }
@@ -35,6 +36,28 @@ struct CullWorkspaceView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(model.errorMessage ?? "Unknown error")
+        }
+        .alert(model.applyConfirmationTitle, isPresented: $model.showApplyConfirmation) {
+            Button(model.applyButtonLabel) { model.applyConfirmedChanges() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(model.applyConfirmationMessage)
+        }
+        .confirmationDialog(
+            "Apply or discard cull changes?",
+            isPresented: $model.showPendingChangesConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(model.applyButtonLabel) { model.applyPendingChangesAndContinue() }
+            Button("Discard changes", role: .destructive) { model.discardPendingChangesAndContinue() }
+            Button("Cancel", role: .cancel) { model.cancelPendingChangesConfirmation() }
+        } message: {
+            Text("\(model.applyConfirmationMessage) You can also discard these local marks; nothing has moved yet.")
+        }
+        .alert("Could not apply cull changes", isPresented: $model.showApplyError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(model.applyErrorMessage ?? "Unknown error")
         }
     }
 
@@ -86,18 +109,18 @@ struct CullSidebarSections: View {
             }
 
             Button("Choose Folder…") { model.chooseFolder() }
-                .disabled(model.isScanning)
+                .disabled(model.isScanning || model.isApplying)
 
             Menu("Recent Import") {
                 if model.recentImportedFolders.isEmpty {
                     Text("No completed Fotocopy import yet")
                 } else {
                     ForEach(model.recentImportedFolders, id: \.path) { folder in
-                        Button(folder.path) { model.use(folder: folder) }
+                            Button(folder.path) { model.requestUse(folder: folder) }
                     }
                 }
             }
-            .disabled(model.isScanning)
+            .disabled(model.isScanning || model.isApplying)
 
             Picker("Scan workers", selection: $model.workerCount) {
                 Text("1").tag(1)
@@ -105,7 +128,7 @@ struct CullSidebarSections: View {
                 Text("4").tag(4)
                 Text("6").tag(6)
             }
-            .disabled(model.isScanning)
+            .disabled(model.isScanning || model.isApplying)
         }
 
         if model.isScanning {
@@ -242,6 +265,11 @@ private struct BurstReviewView: View {
                         }
                         .buttonStyle(.borderedProminent)
 
+                        Button(model.isRejecting(selectedFrame.url) ? "Marked as reject" : "Mark as reject") {
+                            model.toggleRejecting(selectedFrame.url)
+                        }
+                        .buttonStyle(.bordered)
+
                         Divider()
 
                         if model.isLoadingCameraAFTarget(for: selectedFrame.url) {
@@ -285,7 +313,7 @@ private struct BurstReviewView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text("These are temporary selections only. No file metadata is written in this version.")
+                        Text("Marks stay local until Apply. Applied selects and rejects move into matching subfolders; unmarked frames stay here.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -299,6 +327,7 @@ private struct BurstReviewView: View {
                     .font(.headline)
                 Spacer()
                 Button("Keep all") { model.markAllKeeping(in: burst) }
+                Button("Reject all") { model.markAllRejecting(in: burst) }
                 Button("Clear selection") { model.clearKeeping(in: burst) }
             }
 
@@ -324,6 +353,9 @@ private struct BurstReviewView: View {
                                     if model.isKeeping(frame.url) {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundStyle(.green)
+                                    } else if model.isRejecting(frame.url) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.red)
                                     }
                                     Text(captureLabel(frame))
                                         .font(.caption2)
@@ -361,9 +393,26 @@ private struct BurstReviewView: View {
 
             Spacer(minLength: 0)
 
-            Label("Read-only review: no selections, ratings, Finder tags, sidecars, moves, or deletions are saved.", systemImage: "lock.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                if let summary = model.lastApplySummary {
+                    Label(summary, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label(
+                        model.hasPendingCullChanges
+                            ? "Changes have not been applied yet."
+                            : "Mark explicit selects or rejects; unmarked frames stay in place.",
+                        systemImage: model.hasPendingCullChanges ? "exclamationmark.circle" : "hand.point.up.left"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(model.applyButtonLabel) { model.requestApply() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.hasPendingCullChanges || model.isApplying)
+            }
         }
         .padding(24)
         .task(id: burst.id) {
@@ -848,16 +897,24 @@ final class CullViewModel {
     var currentFilename = ""
     var errorMessage: String?
     var showError = false
+    var applyErrorMessage: String?
+    var showApplyError = false
+    var showApplyConfirmation = false
+    var showPendingChangesConfirmation = false
+    var isApplying = false
+    var lastApplySummary: String?
     var selectedBurstID: URL?
     var selectedFrameURL: URL?
     var inspectionSource: CullInspectionSource?
     var isPickingInspectionPoint = false
-    private(set) var keeping: Set<URL> = []
+    private(set) var dispositions: [URL: CullDisposition] = [:]
     private(set) var cameraAFTargets: [URL: CameraAFTarget] = [:]
     private(set) var loadedCameraAFTargetURLs: Set<URL> = []
     private(set) var loadingCameraAFTargetURLs: Set<URL> = []
 
     private var scanTask: Task<Void, Never>?
+    private var pendingContinuation: (() -> Void)?
+    private var pendingCancellation: (() -> Void)?
 
     init() {
         if let path = UserDefaults.standard.string(forKey: PreferenceKeys.lastCullFolder) {
@@ -876,6 +933,29 @@ final class CullViewModel {
         scanResult?.bursts.first { $0.id == selectedBurstID }
     }
 
+    var hasPendingCullChanges: Bool { !dispositions.isEmpty }
+    var selectCount: Int { dispositions.values.filter { $0 == .select }.count }
+    var rejectCount: Int { dispositions.values.filter { $0 == .reject }.count }
+    var markedFrameCount: Int { dispositions.count }
+
+    var applyConfirmationTitle: String {
+        "Apply \(markedFrameCount) cull \(markedFrameCount == 1 ? "change" : "changes")?"
+    }
+
+    var applyConfirmationMessage: String {
+        let moves = [
+            selectCount > 0 ? "\(selectCount) to Selects" : nil,
+            rejectCount > 0 ? "\(rejectCount) to Rejects" : nil
+        ]
+        .compactMap { $0 }
+        .joined(separator: " and ")
+        return "This moves \(moves). Every unmarked frame stays where it is. Nothing is deleted."
+    }
+
+    var applyButtonLabel: String {
+        "Move \(markedFrameCount) \(markedFrameCount == 1 ? "frame" : "frames")"
+    }
+
     /// A manual choice takes precedence. Camera AF mode resolves the target
     /// separately for every frame, so the crop can follow a moving subject.
     var inspectionPoint: CullInspectionPoint? {
@@ -892,26 +972,38 @@ final class CullViewModel {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Review Folder"
-        panel.message = "Choose one Fotocopy destination folder containing CR3 photos. Fotocopy will not modify its files."
+        panel.message = "Choose one Fotocopy destination folder containing CR3 photos. Fotocopy only moves explicit selects or rejects after you confirm Apply."
         if let folderURL {
             panel.directoryURL = folderURL
         }
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        use(folder: url)
+        requestUse(folder: url)
     }
 
-    func use(folder: URL) {
+    func requestUse(folder: URL) {
+        requestContinuation { [weak self] in
+            self?.use(folder: folder)
+        }
+    }
+
+    private func use(folder: URL) {
         folderURL = folder
         UserDefaults.standard.set(folder.path, forKey: PreferenceKeys.lastCullFolder)
-        scan()
+        startScan()
     }
 
     func scan() {
+        requestContinuation { [weak self] in
+            self?.startScan()
+        }
+    }
+
+    private func startScan() {
         guard let folderURL, !isScanning else { return }
         scanTask?.cancel()
         scanResult = nil
-        keeping.removeAll()
+        dispositions.removeAll()
         selectedBurstID = nil
         selectedFrameURL = nil
         inspectionSource = nil
@@ -962,6 +1054,108 @@ final class CullViewModel {
         scanTask = nil
         isScanning = false
         currentFilename = "Cancelled"
+    }
+
+    func requestLeavingCull(
+        onContinue: @escaping () -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
+        requestContinuation(onContinue, onCancel: onCancel)
+    }
+
+    func requestApply() {
+        guard hasPendingCullChanges, !isApplying else { return }
+        showApplyConfirmation = true
+    }
+
+    func applyConfirmedChanges() {
+        showApplyConfirmation = false
+        applyMarkedFrames(then: pendingContinuation)
+    }
+
+    func applyPendingChangesAndContinue() {
+        showPendingChangesConfirmation = false
+        applyMarkedFrames(then: pendingContinuation)
+    }
+
+    func discardPendingChangesAndContinue() {
+        dispositions.removeAll()
+        finishPendingContinuation()
+    }
+
+    func cancelPendingChangesConfirmation() {
+        showPendingChangesConfirmation = false
+        let cancellation = pendingCancellation
+        pendingContinuation = nil
+        pendingCancellation = nil
+        cancellation?()
+    }
+
+    private func requestContinuation(
+        _ continuation: @escaping () -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
+        guard hasPendingCullChanges else {
+            continuation()
+            return
+        }
+        pendingContinuation = continuation
+        pendingCancellation = onCancel
+        showPendingChangesConfirmation = true
+    }
+
+    private func applyMarkedFrames(then continuation: (() -> Void)?) {
+        guard let folderURL, hasPendingCullChanges, !isApplying else { return }
+
+        let markedDispositions = dispositions
+        isApplying = true
+        applyErrorMessage = nil
+
+        Task { [weak self] in
+            do {
+                let plan = try await Task.detached(priority: .userInitiated) {
+                    try CullApplyEngine.makePlan(
+                        folderURL: folderURL,
+                        dispositions: markedDispositions
+                    )
+                }.value
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try CullApplyEngine.apply(plan)
+                }.value
+
+                guard !Task.isCancelled, let self else { return }
+                self.dispositions.removeAll()
+                self.isApplying = false
+                self.lastApplySummary = Self.applySummary(for: result)
+                if continuation != nil {
+                    self.finishPendingContinuation()
+                } else {
+                    self.startScan()
+                }
+            } catch {
+                guard let self else { return }
+                self.isApplying = false
+                self.applyErrorMessage = error.localizedDescription
+                self.showApplyError = true
+            }
+        }
+    }
+
+    private func finishPendingContinuation() {
+        let continuation = pendingContinuation
+        pendingContinuation = nil
+        pendingCancellation = nil
+        continuation?()
+    }
+
+    private static func applySummary(for result: CullApplyResult) -> String {
+        var parts: [String] = []
+        if result.selectCount > 0 { parts.append("\(result.selectCount) moved to Selects") }
+        if result.rejectCount > 0 { parts.append("\(result.rejectCount) moved to Rejects") }
+        if result.companionFileCount > 0 {
+            parts.append("\(result.companionFileCount) companion \(result.companionFileCount == 1 ? "file" : "files") moved")
+        }
+        return parts.joined(separator: " · ")
     }
 
     func syncSelectedFrame() {
@@ -1094,23 +1288,49 @@ final class CullViewModel {
     }
 
     func isKeeping(_ url: URL) -> Bool {
-        keeping.contains(url)
+        dispositions[url] == .select
+    }
+
+    func isRejecting(_ url: URL) -> Bool {
+        dispositions[url] == .reject
     }
 
     func toggleKeeping(_ url: URL) {
-        if keeping.contains(url) {
-            keeping.remove(url)
+        lastApplySummary = nil
+        if isKeeping(url) {
+            dispositions.removeValue(forKey: url)
         } else {
-            keeping.insert(url)
+            dispositions[url] = .select
+        }
+    }
+
+    func toggleRejecting(_ url: URL) {
+        lastApplySummary = nil
+        if isRejecting(url) {
+            dispositions.removeValue(forKey: url)
+        } else {
+            dispositions[url] = .reject
         }
     }
 
     func markAllKeeping(in burst: PhotoBurst) {
-        keeping.formUnion(burst.frames.map(\.url))
+        lastApplySummary = nil
+        for frame in burst.frames {
+            dispositions[frame.url] = .select
+        }
+    }
+
+    func markAllRejecting(in burst: PhotoBurst) {
+        lastApplySummary = nil
+        for frame in burst.frames {
+            dispositions[frame.url] = .reject
+        }
     }
 
     func clearKeeping(in burst: PhotoBurst) {
-        keeping.subtract(burst.frames.map(\.url))
+        for frame in burst.frames {
+            dispositions.removeValue(forKey: frame.url)
+        }
     }
 
     func revealFolder() {

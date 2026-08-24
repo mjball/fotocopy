@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct FotocopyApp: App {
+    @NSApplicationDelegateAdaptor(FotocopyApplicationDelegate.self) private var appDelegate
     @State private var isChecking = false
 
     var body: some Scene {
