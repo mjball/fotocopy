@@ -45,6 +45,18 @@ enum CullInspectionSource: Sendable, Hashable {
         guard case let .manual(point) = self else { return nil }
         return point
     }
+
+    /// Camera AF can become the default comparison target once metadata is
+    /// available, but a photographer's manual point must always win. Keeping
+    /// this policy separate makes the asynchronous AF reader predictable when
+    /// the selected frame changes inside a burst.
+    static func automaticallySelected(
+        current: CullInspectionSource?,
+        selectedFrameHasCameraAFTarget: Bool
+    ) -> CullInspectionSource? {
+        guard current == nil, selectedFrameHasCameraAFTarget else { return current }
+        return .cameraAF
+    }
 }
 
 enum CullInspectionGeometry {

@@ -20,7 +20,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - Scans a chosen date folder and its `Keeps`/`Rejects` subfolders to rebuild conservative consecutive-capture bursts from the files on disk.
 - Displays fast embedded JPEG previews, with full-resolution preview loading when you zoom; pinch, double-click, and pan directly in the main viewer. The Frames filmstrip and active detail-crop strip follow the selected frame during keyboard navigation.
 - Offers Full, Compact, and Minimal review layouts, plus a filmstrip, per-frame Keep/Reject badges, and filesystem-derived burst status: no icon before a decision, an outlined green check after a keep or outlined red X after rejects only while review is in progress, then a filled green check when the finished burst has a keeper or a filled red X when every frame is rejected.
-- Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point.
+- Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point. When a selected frame records an active target, Fotocopy automatically activates the matching crop comparison while preserving a manual point if you chose one.
 - Provides keyboard-driven review: arrow keys navigate frames and bursts; `K`/`X` keep or reject the current frame; `⇧K` keeps the current frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
 - Applies choices immediately by moving the CR3 and its paired XMP/ON1 sidecars into `Keeps` or `Rejects`. The latest move can be undone, and a later scan or relaunch restores the decision badges from the folder structure.
 

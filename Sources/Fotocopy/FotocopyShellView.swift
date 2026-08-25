@@ -64,20 +64,9 @@ struct FotocopyShellView: View {
         .toolbar {
             if workspace == .cullBursts {
                 ToolbarItem(placement: .primaryAction) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         if cullModel.folderURL != nil {
-                            Text("View")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Picker("Cull layout", selection: $cullReviewLayout) {
-                                ForEach(CullReviewLayout.allCases) { layout in
-                                    Text(layout.title).tag(layout)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
-                            .frame(width: 208)
-                            .help("Choose how much surrounding UI is shown while reviewing bursts")
+                            CullReviewLayoutToolbarControl(layout: $cullReviewLayout)
                         }
 
                         if cullModel.folderURL != nil, driveTemperatureMonitor.primaryReading != nil {
@@ -222,6 +211,58 @@ struct FotocopyShellView: View {
         guard workspace != .importPhotos else { return }
         workspace = .importPhotos
         sidebarSelection = nil
+    }
+}
+
+/// A fixed-width control keeps Full, Compact, and Minimal visually balanced
+/// in the toolbar. The native segmented picker widened and redistributed its
+/// labels depending on toolbar space, which made the review controls feel
+/// unstable beside the drive status.
+private struct CullReviewLayoutToolbarControl: View {
+    @Binding var layout: CullReviewLayout
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Text("View")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 0) {
+                ForEach(Array(CullReviewLayout.allCases.enumerated()), id: \.element.id) { index, candidate in
+                    Button {
+                        layout = candidate
+                    } label: {
+                        Text(candidate.title)
+                            .font(.caption.weight(candidate == layout ? .semibold : .regular))
+                            .frame(width: 64, height: 28)
+                            .contentShape(Rectangle())
+                            .background {
+                                if candidate == layout {
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .fill(.tertiary)
+                                        .padding(2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(candidate.title) review layout")
+                    .accessibilityAddTraits(candidate == layout ? .isSelected : [])
+
+                    if index < CullReviewLayout.allCases.count - 1 {
+                        Rectangle()
+                            .fill(.separator.opacity(0.6))
+                            .frame(width: 1, height: 16)
+                    }
+                }
+            }
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(.separator.opacity(0.55), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .help("Choose how much surrounding UI is shown while reviewing bursts")
+        }
     }
 }
 

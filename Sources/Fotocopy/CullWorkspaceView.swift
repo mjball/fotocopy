@@ -1774,6 +1774,7 @@ final class CullViewModel {
 
     func selectFrame(_ url: URL) {
         selectedFrameURL = url
+        automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
     func moveSelectedFrame(in burst: PhotoBurst, by offset: Int) {
@@ -1782,6 +1783,7 @@ final class CullViewModel {
             adjacentTo: selectedFrameURL,
             offset: offset
         )
+        automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
     func moveSelectedBurst(by offset: Int) {
@@ -1871,13 +1873,18 @@ final class CullViewModel {
     }
 
     private func automaticallyUseCameraAFTarget(for burst: PhotoBurst) {
-        guard inspectionSource == nil,
-              selectedBurstID == burst.id,
-              let selectedFrameURL,
-              cameraAFTargets[selectedFrameURL] != nil else {
-            return
-        }
-        inspectionSource = .cameraAF
+        guard selectedBurstID == burst.id else { return }
+        automaticallyUseCameraAFTargetForSelectedFrame()
+    }
+
+    /// A burst's AF data arrives asynchronously. Re-evaluate the selected
+    /// frame both after that read finishes and after Left/Right changes it, so
+    /// a later frame with a target immediately enables its crop comparison.
+    private func automaticallyUseCameraAFTargetForSelectedFrame() {
+        inspectionSource = CullInspectionSource.automaticallySelected(
+            current: inspectionSource,
+            selectedFrameHasCameraAFTarget: selectedFrameURL.flatMap { cameraAFTargets[$0] } != nil
+        )
     }
 
     private nonisolated static func readCameraAFTargets(

@@ -150,6 +150,23 @@ import Testing
     #expect(PhotoBurst(frames: [kept, rejected]).isReviewed)
 }
 
+@Test func cameraAFBecomesTheDefaultOnlyWhenAvailableAndManualChoiceWins() {
+    let manual = CullInspectionSource.manual(CullInspectionPoint(x: 0.3, y: 0.7))
+
+    #expect(CullInspectionSource.automaticallySelected(
+        current: nil,
+        selectedFrameHasCameraAFTarget: false
+    ) == nil)
+    #expect(CullInspectionSource.automaticallySelected(
+        current: nil,
+        selectedFrameHasCameraAFTarget: true
+    ) == .cameraAF)
+    #expect(CullInspectionSource.automaticallySelected(
+        current: manual,
+        selectedFrameHasCameraAFTarget: true
+    ) == manual)
+}
+
 @Test func inspectionPointUsesOnlyTheVisibleAspectFitImage() {
     let imageSize = CGSize(width: 4_000, height: 2_000)
     let containerSize = CGSize(width: 400, height: 400)
