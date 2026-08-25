@@ -48,7 +48,7 @@ struct CullLibraryDecisionsView: View {
                 ContentUnavailableView(
                     "No Fotocopy library selected",
                     systemImage: "externaldrive.badge.questionmark",
-                    description: Text(model.libraryDecisionError ?? "Set an Import destination, then Organize can review its Selects and Rejects folders."))
+                    description: Text(model.libraryDecisionError ?? "Set an Import destination, then Organize can review its Keeps and Rejects folders."))
             }
         }
         .task {

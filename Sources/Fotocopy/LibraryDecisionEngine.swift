@@ -94,7 +94,7 @@ enum CullLibraryDecisionError: LocalizedError {
     }
 }
 
-/// Discovers only Fotocopy's YYYY/MM/DD/{Selects,Rejects} decision folders.
+/// Discovers only Fotocopy's YYYY/MM/DD/{Keeps,Rejects} decision folders.
 /// It never follows symlinks or treats arbitrary folders as cull decisions.
 enum LibraryDecisionEngine {
     /// Import may be pointed at a volume while the existing Fotocopy library

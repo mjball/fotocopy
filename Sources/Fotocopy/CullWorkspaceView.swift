@@ -70,14 +70,14 @@ struct CullWorkspaceView: View {
             ContentUnavailableView(
                 "Finding bursts",
                 systemImage: "rectangle.stack.badge.play",
-                description: Text("Fotocopy reads this date folder plus Selects and Rejects, then rebuilds your burst review from the files on disk."))
+                description: Text("Fotocopy reads this date folder plus Keeps and Rejects, then rebuilds your burst review from the files on disk."))
         } else if let burst = model.selectedBurst {
             BurstReviewView(burst: burst, model: model, layout: layout)
         } else if let scan = model.scanResult, scan.cr3Count == 0 {
             ContentUnavailableView(
                 "No CR3 files in this folder",
                 systemImage: "camera.metering.none",
-                description: Text("Cull looks for CR3 files in this destination date folder, plus its Selects and Rejects subfolders."))
+                description: Text("Cull looks for CR3 files in this destination date folder, plus its Keeps and Rejects subfolders."))
         } else if let scan = model.scanResult, scan.bursts.isEmpty {
             ContentUnavailableView(
                 "No bursts found",
@@ -1415,7 +1415,7 @@ final class CullViewModel {
         libraryDecisionError = nil
         libraryTrashResult = nil
         isScanningLibraryDecisions = true
-        libraryScanStatus = "Finding Selects and Rejects…"
+        libraryScanStatus = "Finding Keeps and Rejects…"
         let model = self
         libraryScanTask = Task {
             do {
@@ -2019,7 +2019,7 @@ final class CullViewModel {
         let selectCount = states.filter { $0.disposition == .select }.count
         let rejectCount = states.filter { $0.disposition == .reject }.count
         let restoredCount = states.filter { $0.disposition == nil }.count
-        if selectCount > 0 { parts.append("\(selectCount) moved to Selects") }
+        if selectCount > 0 { parts.append("\(selectCount) moved to Keeps") }
         if rejectCount > 0 { parts.append("\(rejectCount) moved to Rejects") }
         if restoredCount > 0 { parts.append("\(restoredCount) returned to this date folder") }
         if companionFileCount > 0 {

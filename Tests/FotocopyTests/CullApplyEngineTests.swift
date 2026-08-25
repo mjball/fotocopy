@@ -15,7 +15,7 @@ struct CullApplyEngineTests {
         try Data(repeating: 0x42, count: size).write(to: url)
     }
 
-    @Test func applyMovesOnlyExplicitSelectsAndRejects() throws {
+    @Test func applyMovesOnlyExplicitKeepsAndRejects() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -39,7 +39,7 @@ struct CullApplyEngineTests {
 
         #expect(result.selectCount == 1)
         #expect(result.rejectCount == 1)
-        #expect(FileManager.default.fileExists(atPath: day.appendingPathComponent("Selects/BL5A0001.CR3").path))
+        #expect(FileManager.default.fileExists(atPath: day.appendingPathComponent("Keeps/BL5A0001.CR3").path))
         #expect(FileManager.default.fileExists(atPath: day.appendingPathComponent("Rejects/BL5A0002.CR3").path))
         #expect(FileManager.default.fileExists(atPath: unmarked.path))
     }
@@ -62,9 +62,9 @@ struct CullApplyEngineTests {
         let result = try CullApplyEngine.apply(plan)
 
         #expect(result.companionFileCount == 2)
-        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Selects/BL5A0001.CR3").path))
-        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Selects/BL5A0001.CR3.on1").path))
-        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Selects/BL5A0001.xmp").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Keeps/BL5A0001.CR3").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Keeps/BL5A0001.CR3.on1").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Keeps/BL5A0001.xmp").path))
     }
 
     @Test func immediateRelocationCanReclassifyAndRestoreAFrame() throws {
@@ -76,7 +76,7 @@ struct CullApplyEngineTests {
         try createFile(at: raw)
         try createFile(at: sidecar)
 
-        let selected = root.appendingPathComponent("Selects/BL5A0001.CR3")
+        let selected = root.appendingPathComponent("Keeps/BL5A0001.CR3")
         let rejected = root.appendingPathComponent("Rejects/BL5A0001.CR3")
 
         let selectPlan = try CullApplyEngine.makePlan(
@@ -136,7 +136,7 @@ struct CullApplyEngineTests {
         )
         _ = try CullApplyEngine.apply(plan)
 
-        let selected = day.appendingPathComponent("Selects/BL5A0001.CR3")
+        let selected = day.appendingPathComponent("Keeps/BL5A0001.CR3")
         let restorePlan = try CullApplyEngine.makePlan(
             folderURL: day,
             rawRelocations: [CullFrameRelocation(sourceURL: selected, destinationURL: raw)]
@@ -157,7 +157,7 @@ struct CullApplyEngineTests {
 
         let raw = root.appendingPathComponent("BL5A0001.CR3")
         try createFile(at: raw)
-        let selects = root.appendingPathComponent("Selects")
+        let selects = root.appendingPathComponent("Keeps")
         try FileManager.default.createDirectory(at: selects, withIntermediateDirectories: true)
         try createFile(at: selects.appendingPathComponent("BL5A0001.CR3"))
 

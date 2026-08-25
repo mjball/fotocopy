@@ -8,14 +8,14 @@ enum CullDisposition: String, Sendable, Hashable, CaseIterable {
 
     var destinationFolderName: String {
         switch self {
-        case .select: return "Selects"
+        case .select: return "Keeps"
         case .reject: return "Rejects"
         }
     }
 
     var displayName: String {
         switch self {
-        case .select: return "Select"
+        case .select: return "Keep"
         case .reject: return "Reject"
         }
     }
@@ -95,7 +95,7 @@ private struct CullApplyFileMove: Sendable {
 /// Keep/Reject action and for moving a marked frame back to the date folder.
 enum CullApplyEngine {
     /// Compatibility entry point for batch decisions. Explicit marks move from
-    /// the date folder into Selects or Rejects; unmarked frames are untouched.
+    /// the date folder into Keeps or Rejects; unmarked frames are untouched.
     static func makePlan(
         folderURL: URL,
         dispositions: [URL: CullDisposition]
@@ -122,7 +122,7 @@ enum CullApplyEngine {
     }
 
     /// Builds a plan for an arbitrary reversible move between the date folder,
-    /// Selects, and Rejects. A caller can use inverse relocations to undo the
+    /// Keeps, and Rejects. A caller can use inverse relocations to undo the
     /// most recent cull action without deleting or rewriting image data.
     static func makePlan(
         folderURL: URL,

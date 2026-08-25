@@ -457,7 +457,7 @@ struct DuplicateCheckerTests {
             destinationSize: 100
         )
 
-        let selects = dateRoot.appendingPathComponent("Selects")
+        let selects = dateRoot.appendingPathComponent("Keeps")
         try FileManager.default.createDirectory(at: selects, withIntermediateDirectories: true)
         let movedURL = selects.appendingPathComponent("BL5A2471.CR3")
         try FileManager.default.moveItem(at: originalURL, to: movedURL)
@@ -469,7 +469,7 @@ struct DuplicateCheckerTests {
             sourceBucket: "camera-card-1"
         ))
 
-        let state = try manifestState(at: dir, relativePath: "2026/08/22/Selects/BL5A2471.CR3")
+        let state = try manifestState(at: dir, relativePath: "2026/08/22/Keeps/BL5A2471.CR3")
         #expect(state.sourceBucket == "camera-card-1")
         #expect(state.presence == "present")
         #expect(state.deletedAt == nil)

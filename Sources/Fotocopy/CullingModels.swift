@@ -263,7 +263,7 @@ enum BurstGroupingEngine {
 
     /// A cull scan treats the chosen date folder as the source of truth. It
     /// also reads Fotocopy's two immediate decision folders so that moving a
-    /// frame to Selects or Rejects does not split the burst after relaunch.
+    /// frame to Keeps or Rejects does not split the burst after relaunch.
     /// Other subfolders deliberately remain outside the cull scan.
     private static func reviewFiles(in folder: URL) throws -> [IndexedURL] {
         let rootFiles = try cr3Files(in: folder).map {

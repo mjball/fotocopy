@@ -66,7 +66,7 @@ import Testing
         .appendingPathComponent("fotocopy-burst-scan-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let selects = root.appendingPathComponent("Selects", isDirectory: true)
+    let selects = root.appendingPathComponent("Keeps", isDirectory: true)
     let rejects = root.appendingPathComponent("Rejects", isDirectory: true)
     try FileManager.default.createDirectory(at: selects, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: rejects, withIntermediateDirectories: true)
