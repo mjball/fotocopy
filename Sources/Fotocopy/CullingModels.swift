@@ -139,10 +139,29 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
     var id: URL { frames[0].url }
     var firstFrame: CullPhoto { frames[0] }
 
+    /// A completed burst communicates its outcome in the sidebar. An unmarked
+    /// frame deliberately produces no outcome, so a missing icon means there
+    /// is still a decision to make.
+    var reviewOutcome: BurstReviewOutcome? {
+        guard !frames.isEmpty,
+              frames.allSatisfy({ $0.disposition != nil }) else {
+            return nil
+        }
+
+        if frames.allSatisfy({ $0.disposition == .select }) {
+            return .allKept
+        }
+        if frames.allSatisfy({ $0.disposition == .reject }) {
+            return .allRejected
+        }
+        return .mixed
+    }
+
     /// A burst is reviewed only when every frame has an explicit, on-disk
-    /// decision. An unmarked frame deliberately leaves the burst unfinished.
+    /// decision. The outcome remains filesystem-derived and is never stored
+    /// separately from the individual Keep/Reject moves.
     var isReviewed: Bool {
-        !frames.isEmpty && frames.allSatisfy { $0.disposition != nil }
+        reviewOutcome != nil
     }
 
     var title: String {
@@ -155,6 +174,15 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
     var captureRange: (start: Date?, end: Date?) {
         (frames.first?.captureDate, frames.last?.captureDate)
     }
+}
+
+/// The three meaningful completed-burst states. A partial burst has no value
+/// because the sidebar intentionally shows no status icon until every frame
+/// has been kept or rejected.
+enum BurstReviewOutcome: Equatable, Sendable {
+    case allKept
+    case mixed
+    case allRejected
 }
 
 /// The arrow-key policy for a single burst. Navigation stops at either end so

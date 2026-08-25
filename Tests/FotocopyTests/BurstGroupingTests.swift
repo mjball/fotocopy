@@ -96,7 +96,7 @@ import Testing
     #expect(!scan.bursts[0].isReviewed)
 }
 
-@Test func burstIsReviewedOnlyWhenEveryFrameHasADecision() {
+@Test func burstReviewOutcomeRequiresEveryFrameAndDistinguishesCompletedStates() {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let kept = CullPhoto(
         url: URL(fileURLWithPath: "/tmp/BL5A1001.CR3"),
@@ -122,7 +122,27 @@ import Testing
         sequenceNumber: 1003
     )
 
-    #expect(PhotoBurst(frames: [kept, rejected]).isReviewed)
+    let anotherKept = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1004.CR3"),
+        filename: "BL5A1004.CR3",
+        captureDate: start.addingTimeInterval(0.3),
+        dateSource: .exif,
+        sequenceNumber: 1004,
+        disposition: .select
+    )
+    let anotherRejected = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1005.CR3"),
+        filename: "BL5A1005.CR3",
+        captureDate: start.addingTimeInterval(0.4),
+        dateSource: .exif,
+        sequenceNumber: 1005,
+        disposition: .reject
+    )
+
+    #expect(PhotoBurst(frames: [kept, anotherKept]).reviewOutcome == .allKept)
+    #expect(PhotoBurst(frames: [kept, rejected]).reviewOutcome == .mixed)
+    #expect(PhotoBurst(frames: [rejected, anotherRejected]).reviewOutcome == .allRejected)
+    #expect(PhotoBurst(frames: [kept, rejected, unmarked]).reviewOutcome == nil)
     #expect(!PhotoBurst(frames: [kept, rejected, unmarked]).isReviewed)
 }
 

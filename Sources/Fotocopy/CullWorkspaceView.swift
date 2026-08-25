@@ -105,11 +105,8 @@ struct CullSidebarSections: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
-                            if burst.isReviewed {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .accessibilityLabel("Reviewed")
-                                    .help("Reviewed: every frame has been kept or rejected")
+                            if let outcome = burst.reviewOutcome {
+                                BurstReviewOutcomeIcon(outcome: outcome)
                             }
                         }
                         .tag(FotocopySidebarDestination.burst(burst.id))
@@ -194,6 +191,51 @@ struct CullSidebarSections: View {
             return "\(formatter.string(from: start)) – \(formatter.string(from: end))"
         }
         return formatter.string(from: start)
+    }
+}
+
+/// Status is deliberately absent until every frame is decided. Once complete,
+/// the fill and glyph distinguish "all kept", a productive mixed cull, and an
+/// all-rejected burst without requiring the photographer to open it again.
+private struct BurstReviewOutcomeIcon: View {
+    let outcome: BurstReviewOutcome
+
+    private var systemImage: String {
+        switch outcome {
+        case .allKept:
+            "checkmark.circle.fill"
+        case .mixed:
+            "checkmark.circle"
+        case .allRejected:
+            "xmark.circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch outcome {
+        case .allKept, .mixed:
+            .green
+        case .allRejected:
+            .red
+        }
+    }
+
+    private var accessibilityDescription: String {
+        switch outcome {
+        case .allKept:
+            "Reviewed: every frame kept"
+        case .mixed:
+            "Reviewed: some frames kept and some rejected"
+        case .allRejected:
+            "Reviewed: every frame rejected"
+        }
+    }
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .foregroundStyle(color)
+            .accessibilityLabel(accessibilityDescription)
+            .help(accessibilityDescription)
     }
 }
 
