@@ -43,9 +43,9 @@ enum FotocopySidebarDestination: Hashable {
 /// folders, rather than separate applications or a managed photo library.
 struct FotocopyShellView: View {
     @AppStorage(PreferenceKeys.activeWorkspace) private var workspaceRaw = FotocopyWorkspace.importPhotos.rawValue
-    @State private var cullModel = CullViewModel()
+    @Bindable var cullModel: CullViewModel
     @State private var sidebarSelection: FotocopySidebarDestination?
-    @State private var cullReviewLayout: CullReviewLayout = .browse
+    @Binding var cullReviewLayout: CullReviewLayout
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
 
     private var workspace: FotocopyWorkspace {

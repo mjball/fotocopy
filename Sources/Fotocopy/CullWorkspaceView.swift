@@ -205,7 +205,6 @@ struct CullSidebarSections: View {
 
     private var chooseFolderButton: some View {
         Button("Choose Folder…") { model.chooseFolder() }
-            .keyboardShortcut("o", modifiers: .command)
             .controlSize(.small)
             .buttonStyle(.bordered)
             .disabled(model.isScanning || model.isMoving)
