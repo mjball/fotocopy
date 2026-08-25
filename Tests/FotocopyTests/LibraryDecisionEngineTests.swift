@@ -54,6 +54,22 @@ struct LibraryDecisionEngineTests {
         #expect(scan.decisions.allSatisfy { $0.dateLabel == "2026/08/22" })
     }
 
+    @Test func libraryRootUsesFotocopyChildWhenImportDestinationIsAVolume() throws {
+        let volumeRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: volumeRoot) }
+
+        let library = volumeRoot.appendingPathComponent("Fotocopy")
+        let raw = decisionFolder(library, disposition: .reject).appendingPathComponent("BL5A0099.CR3")
+        try createFile(raw)
+
+        let resolved = LibraryDecisionEngine.libraryRoot(forImportDestination: volumeRoot)
+        #expect(resolved.resolvingSymlinksInPath() == library.resolvingSymlinksInPath())
+
+        try createFile(decisionFolder(volumeRoot, disposition: .select).appendingPathComponent("BL5A0100.CR3"))
+        let directResolved = LibraryDecisionEngine.libraryRoot(forImportDestination: volumeRoot)
+        #expect(directResolved.resolvingSymlinksInPath() == volumeRoot.resolvingSymlinksInPath())
+    }
+
     @Test func trashPlanRevalidatesChangedPackageAndReportsPartialFailures() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }

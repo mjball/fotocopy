@@ -43,6 +43,14 @@ struct FotocopyApp: App {
                     )
                 }
                 .keyboardShortcut("2", modifiers: .command)
+
+                Button("Organize Library") {
+                    UserDefaults.standard.set(
+                        FotocopyWorkspace.organize.rawValue,
+                        forKey: PreferenceKeys.activeWorkspace
+                    )
+                }
+                .keyboardShortcut("3", modifiers: .command)
             }
         }
     }

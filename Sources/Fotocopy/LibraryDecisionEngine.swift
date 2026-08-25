@@ -97,6 +97,22 @@ enum CullLibraryDecisionError: LocalizedError {
 /// Discovers only Fotocopy's YYYY/MM/DD/{Selects,Rejects} decision folders.
 /// It never follows symlinks or treats arbitrary folders as cull decisions.
 enum LibraryDecisionEngine {
+    /// Import may be pointed at a volume while the existing Fotocopy library
+    /// lives in its conventional `Fotocopy` child. Prefer the selected folder
+    /// when it already looks like a library; otherwise adopt that child only
+    /// when it contains Fotocopy's date hierarchy or manifest.
+    static func libraryRoot(forImportDestination importDestinationURL: URL, fileManager: FileManager = .default) -> URL {
+        let destination = importDestinationURL.standardizedFileURL
+        guard isSafeDirectory(destination, fileManager: fileManager) else { return destination }
+        if looksLikeLibraryRoot(destination, fileManager: fileManager) { return destination }
+
+        let conventionalChild = destination.appendingPathComponent("Fotocopy", isDirectory: true)
+        if looksLikeLibraryRoot(conventionalChild, fileManager: fileManager) {
+            return conventionalChild.standardizedFileURL
+        }
+        return destination
+    }
+
     static func scan(libraryRootURL: URL, fileManager: FileManager = .default) throws -> CullLibraryDecisionScan {
         let root = libraryRootURL.standardizedFileURL
         guard isSafeDirectory(root, fileManager: fileManager) else {
@@ -241,6 +257,23 @@ enum LibraryDecisionEngine {
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles]
         ))?.filter { isSafeDirectory($0, fileManager: fileManager) } ?? []
+    }
+
+    private static func looksLikeLibraryRoot(_ url: URL, fileManager: FileManager) -> Bool {
+        guard isSafeDirectory(url, fileManager: fileManager) else { return false }
+        let manifest = url
+            .appendingPathComponent(DestinationManifest.metadataDirectoryName, isDirectory: true)
+            .appendingPathComponent(DestinationManifest.databaseFilename)
+        if fileManager.fileExists(atPath: manifest.path) { return true }
+        return childDirectories(of: url, fileManager: fileManager).contains { yearURL in
+            guard isYear(yearURL.lastPathComponent) else { return false }
+            return childDirectories(of: yearURL, fileManager: fileManager).contains { monthURL in
+                guard isMonth(monthURL.lastPathComponent) else { return false }
+                return childDirectories(of: monthURL, fileManager: fileManager).contains {
+                    isDay($0.lastPathComponent, year: yearURL.lastPathComponent, month: monthURL.lastPathComponent)
+                }
+            }
+        }
     }
 
     private static func directCR3Files(in directory: URL, fileManager: FileManager) -> [URL] {

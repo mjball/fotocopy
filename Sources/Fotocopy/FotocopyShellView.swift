@@ -3,6 +3,7 @@ import SwiftUI
 enum FotocopyWorkspace: String, CaseIterable, Identifiable {
     case importPhotos
     case cullBursts
+    case organize
 
     var id: String { rawValue }
 
@@ -10,6 +11,7 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
         switch self {
         case .importPhotos: return "Import"
         case .cullBursts: return "Cull"
+        case .organize: return "Organize"
         }
     }
 
@@ -17,6 +19,7 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
         switch self {
         case .importPhotos: return "Photo Import"
         case .cullBursts: return "Burst Cull"
+        case .organize: return "Organize Library"
         }
     }
 
@@ -24,6 +27,7 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
         switch self {
         case .importPhotos: return "square.and.arrow.down"
         case .cullBursts: return "rectangle.stack"
+        case .organize: return "checklist"
         }
     }
 }
@@ -33,7 +37,6 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
 /// burst is selected below it.
 enum FotocopySidebarDestination: Hashable {
     case burst(URL)
-    case libraryDecisions
 }
 
 /// Keeps Fotocopy file-first: Import and Cull are two views over ordinary
@@ -92,6 +95,11 @@ struct FotocopyShellView: View {
                     isActive: workspace == .cullBursts,
                     action: activateCull
                 )
+                TaskSidebarRow(
+                    task: .organize,
+                    isActive: workspace == .organize,
+                    action: activateOrganize
+                )
             }
 
             if workspace == .cullBursts {
@@ -109,6 +117,8 @@ struct FotocopyShellView: View {
             ContentView()
         case .cullBursts:
             CullWorkspaceView(model: cullModel, layout: $cullReviewLayout)
+        case .organize:
+            CullLibraryDecisionsView(model: cullModel)
         }
     }
 
@@ -121,19 +131,12 @@ struct FotocopyShellView: View {
             cullModel.destination = .bursts
             cullModel.selectedBurstID = burstID
             cullModel.syncSelectedFrame()
-        case .libraryDecisions:
-            workspace = .cullBursts
-            cullModel.showLibraryDecisions()
         }
     }
 
     private func synchronizeSidebarSelectionWithWorkspace() {
         let storedWorkspace = workspace
         if storedWorkspace == .cullBursts {
-            if cullModel.destination == .libraryDecisions {
-                sidebarSelection = .libraryDecisions
-                return
-            }
             if let burstID = cullModel.selectedBurstID {
                 sidebarSelection = .burst(burstID)
                 return
@@ -147,8 +150,15 @@ struct FotocopyShellView: View {
     }
 
     private func activateCull() {
+        cullModel.showBurstCulling()
         guard workspace != .cullBursts else { return }
         workspace = .cullBursts
+    }
+
+    private func activateOrganize() {
+        cullModel.showLibraryDecisions()
+        workspace = .organize
+        sidebarSelection = nil
     }
 
     private func activateImport() {

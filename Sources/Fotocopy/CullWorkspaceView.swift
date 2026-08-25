@@ -12,7 +12,7 @@ struct CullWorkspaceView: View {
             model.resumeLastScanIfNeeded()
         }
         .toolbar {
-            if model.folderURL != nil, model.destination == .bursts {
+            if model.folderURL != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Picker("Cull layout", selection: $layout) {
                         ForEach(CullReviewLayout.allCases) { layout in
@@ -37,7 +37,7 @@ struct CullWorkspaceView: View {
                     .buttonStyle(.bordered)
                     .help("Cancel the current burst scan")
                 }
-            } else if model.folderURL != nil, model.destination == .bursts {
+            } else if model.folderURL != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         model.scan()
@@ -66,9 +66,7 @@ struct CullWorkspaceView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if model.destination == .libraryDecisions {
-            CullLibraryDecisionsView(model: model)
-        } else if model.isScanning {
+        if model.isScanning {
             ContentUnavailableView(
                 "Finding bursts",
                 systemImage: "rectangle.stack.badge.play",
@@ -103,9 +101,6 @@ struct CullSidebarSections: View {
 
     var body: some View {
         Section("Cull") {
-            Label("Library Decisions", systemImage: "checkmark.circle.badge.questionmark")
-                .tag(FotocopySidebarDestination.libraryDecisions)
-
             if let folder = model.folderURL {
                 Label(folder.path, systemImage: "folder")
                     .lineLimit(2)
@@ -1359,7 +1354,7 @@ final class CullViewModel {
     var configuredLibraryURL: URL? {
         guard let path = UserDefaults.standard.string(forKey: PreferenceKeys.destinationPath),
               !path.isEmpty else { return nil }
-        return URL(fileURLWithPath: path).standardizedFileURL
+        return LibraryDecisionEngine.libraryRoot(forImportDestination: URL(fileURLWithPath: path))
     }
 
     /// A manual choice takes precedence. Camera AF mode resolves the target
@@ -1395,6 +1390,11 @@ final class CullViewModel {
     func showLibraryDecisions() {
         destination = .libraryDecisions
         refreshLibraryDecisionsIfNeeded()
+    }
+
+    func showBurstCulling() {
+        destination = .bursts
+        resumeLastScanIfNeeded()
     }
 
     func refreshLibraryDecisionsIfNeeded() {

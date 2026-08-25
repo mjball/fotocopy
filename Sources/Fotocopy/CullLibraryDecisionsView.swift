@@ -37,7 +37,7 @@ struct CullLibraryDecisionsView: View {
         Group {
             if model.isScanningLibraryDecisions, scan == nil {
                 VStack(spacing: 8) {
-                    ProgressView("Reading Library Decisions")
+                    ProgressView("Reading Organize")
                     Text(model.libraryScanStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -48,7 +48,7 @@ struct CullLibraryDecisionsView: View {
                 ContentUnavailableView(
                     "No Fotocopy library selected",
                     systemImage: "externaldrive.badge.questionmark",
-                    description: Text(model.libraryDecisionError ?? "Set an Import destination, then Library Decisions can review its Selects and Rejects folders."))
+                    description: Text(model.libraryDecisionError ?? "Set an Import destination, then Organize can review its Selects and Rejects folders."))
             }
         }
         .task {
@@ -163,7 +163,7 @@ struct CullLibraryDecisionsView: View {
 
     private func header(_ scan: CullLibraryDecisionScan) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("Library Decisions")
+            Text("Organize")
                 .font(.largeTitle.weight(.semibold))
             Text(scan.libraryRootURL.path)
                 .font(.subheadline.monospaced())
