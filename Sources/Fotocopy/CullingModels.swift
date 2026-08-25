@@ -217,6 +217,53 @@ enum CullBurstNavigation {
     }
 }
 
+/// The compact, plain-key culling vocabulary. Decision keys are deliberately
+/// separate from navigation keys so photographers can work through a burst
+/// without modifier chords or changing their current review layout.
+enum CullKeyboardAction: Equatable {
+    case moveFrame(Int)
+    case moveBurst(Int)
+    case keepCurrentFrame
+    case keepCurrentAndRejectRest
+    case rejectCurrentFrame
+    case rejectBurst
+
+    var isDecision: Bool {
+        switch self {
+        case .moveFrame, .moveBurst:
+            false
+        case .keepCurrentFrame, .keepCurrentAndRejectRest, .rejectCurrentFrame, .rejectBurst:
+            true
+        }
+    }
+}
+
+enum CullKeyboardShortcuts {
+    static func action(
+        keyCode: UInt16,
+        charactersIgnoringModifiers: String?,
+        shiftPressed: Bool
+    ) -> CullKeyboardAction? {
+        switch charactersIgnoringModifiers?.lowercased() {
+        case "k":
+            return shiftPressed ? .keepCurrentAndRejectRest : .keepCurrentFrame
+        case "x":
+            return shiftPressed ? .rejectBurst : .rejectCurrentFrame
+        default:
+            break
+        }
+
+        guard !shiftPressed else { return nil }
+        switch keyCode {
+        case 123: return .moveFrame(-1) // left arrow
+        case 124: return .moveFrame(1) // right arrow
+        case 126: return .moveBurst(-1) // up arrow
+        case 125: return .moveBurst(1) // down arrow
+        default: return nil
+        }
+    }
+}
+
 struct CullFolderScan: Sendable {
     let folder: URL
     let cr3Count: Int

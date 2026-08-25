@@ -282,6 +282,18 @@ private struct BurstReviewView: View {
                 },
                 moveBurst: { offset in
                     model.moveSelectedBurst(by: offset)
+                },
+                keepCurrentFrame: {
+                    model.keepSelectedFrame()
+                },
+                keepCurrentAndRejectRest: {
+                    model.keepSelectedAndRejectRest(in: burst)
+                },
+                rejectCurrentFrame: {
+                    model.rejectSelectedFrame()
+                },
+                rejectBurst: {
+                    model.markAllRejecting(in: burst)
                 }
             )
             .frame(width: 0, height: 0)
@@ -1211,9 +1223,20 @@ private struct CullInspectionCropView: View {
 private struct CullNavigationKeyHandler: NSViewRepresentable {
     let moveFrame: (Int) -> Void
     let moveBurst: (Int) -> Void
+    let keepCurrentFrame: () -> Void
+    let keepCurrentAndRejectRest: () -> Void
+    let rejectCurrentFrame: () -> Void
+    let rejectBurst: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(moveFrame: moveFrame, moveBurst: moveBurst)
+        Coordinator(
+            moveFrame: moveFrame,
+            moveBurst: moveBurst,
+            keepCurrentFrame: keepCurrentFrame,
+            keepCurrentAndRejectRest: keepCurrentAndRejectRest,
+            rejectCurrentFrame: rejectCurrentFrame,
+            rejectBurst: rejectBurst
+        )
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -1224,6 +1247,10 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.moveFrame = moveFrame
         context.coordinator.moveBurst = moveBurst
+        context.coordinator.keepCurrentFrame = keepCurrentFrame
+        context.coordinator.keepCurrentAndRejectRest = keepCurrentAndRejectRest
+        context.coordinator.rejectCurrentFrame = rejectCurrentFrame
+        context.coordinator.rejectBurst = rejectBurst
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -1233,39 +1260,74 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
     final class Coordinator {
         var moveFrame: (Int) -> Void
         var moveBurst: (Int) -> Void
+        var keepCurrentFrame: () -> Void
+        var keepCurrentAndRejectRest: () -> Void
+        var rejectCurrentFrame: () -> Void
+        var rejectBurst: () -> Void
         private var monitor: Any?
 
         init(
             moveFrame: @escaping (Int) -> Void,
-            moveBurst: @escaping (Int) -> Void
+            moveBurst: @escaping (Int) -> Void,
+            keepCurrentFrame: @escaping () -> Void,
+            keepCurrentAndRejectRest: @escaping () -> Void,
+            rejectCurrentFrame: @escaping () -> Void,
+            rejectBurst: @escaping () -> Void
         ) {
             self.moveFrame = moveFrame
             self.moveBurst = moveBurst
+            self.keepCurrentFrame = keepCurrentFrame
+            self.keepCurrentAndRejectRest = keepCurrentAndRejectRest
+            self.rejectCurrentFrame = rejectCurrentFrame
+            self.rejectBurst = rejectBurst
         }
 
         func install() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self,
+                      NSApp.modalWindow == nil,
+                      event.window?.attachedSheet == nil,
                       !Self.isEditingText(in: event.window),
-                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else {
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                      let action = CullKeyboardShortcuts.action(
+                          keyCode: event.keyCode,
+                          charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                          shiftPressed: event.modifierFlags.contains(.shift)
+                      ) else {
                     return event
                 }
 
-                switch event.keyCode {
-                case 123: // left arrow
+                if event.isARepeat, action.isDecision {
+                    return nil
+                }
+
+                switch action {
+                case .moveFrame(-1):
                     self.moveFrame(-1)
                     return nil
-                case 124: // right arrow
+                case .moveFrame(1):
                     self.moveFrame(1)
                     return nil
-                case 126: // up arrow
+                case .moveBurst(-1):
                     self.moveBurst(-1)
                     return nil
-                case 125: // down arrow
+                case .moveBurst(1):
                     self.moveBurst(1)
                     return nil
-                default:
+                case .keepCurrentFrame:
+                    self.keepCurrentFrame()
+                    return nil
+                case .keepCurrentAndRejectRest:
+                    self.keepCurrentAndRejectRest()
+                    return nil
+                case .rejectCurrentFrame:
+                    self.rejectCurrentFrame()
+                    return nil
+                case .rejectBurst:
+                    self.rejectBurst()
+                    return nil
+                case .moveFrame, .moveBurst:
                     return event
                 }
             }
@@ -1750,6 +1812,18 @@ final class CullViewModel {
         moveDisposition(of: url, to: disposition, advanceAfterMove: disposition != nil)
     }
 
+    /// Keyboard decisions are idempotent: repeated K or X presses never turn
+    /// a prior decision back into an unmarked frame.
+    func keepSelectedFrame() {
+        guard let selectedFrameURL else { return }
+        moveDisposition(of: selectedFrameURL, to: .select, advanceAfterMove: true)
+    }
+
+    func rejectSelectedFrame() {
+        guard let selectedFrameURL else { return }
+        moveDisposition(of: selectedFrameURL, to: .reject, advanceAfterMove: true)
+    }
+
     func keepSelectedAndRejectRest(in burst: PhotoBurst) {
         guard let selectedFrameURL,
               burst.frames.contains(where: { $0.url == selectedFrameURL }) else {
@@ -1814,6 +1888,9 @@ final class CullViewModel {
             dispositions[$0.frameURL] != $0.disposition
         }
         guard !changedStates.isEmpty else {
+            if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
+                selectedFrameURL = nextFrameURL
+            }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectBurst(withID: nextBurstID)
             }
@@ -1831,6 +1908,9 @@ final class CullViewModel {
         }
         let relocationCount = relocations.filter { $0.sourceURL != $0.destinationURL }.count
         guard relocationCount > 0 else {
+            if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
+                selectedFrameURL = nextFrameURL
+            }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectBurst(withID: nextBurstID)
             }

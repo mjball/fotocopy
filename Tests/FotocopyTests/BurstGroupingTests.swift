@@ -209,6 +209,44 @@ import Testing
     ) == bursts[0].id)
 }
 
+@Test func cullKeyboardShortcutsMapFrameAndBurstDecisions() {
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 40,
+        charactersIgnoringModifiers: "k",
+        shiftPressed: false
+    ) == .keepCurrentFrame)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 40,
+        charactersIgnoringModifiers: "K",
+        shiftPressed: true
+    ) == .keepCurrentAndRejectRest)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 7,
+        charactersIgnoringModifiers: "x",
+        shiftPressed: false
+    ) == .rejectCurrentFrame)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 7,
+        charactersIgnoringModifiers: "X",
+        shiftPressed: true
+    ) == .rejectBurst)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 123,
+        charactersIgnoringModifiers: nil,
+        shiftPressed: false
+    ) == .moveFrame(-1))
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 125,
+        charactersIgnoringModifiers: nil,
+        shiftPressed: false
+    ) == .moveBurst(1))
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 123,
+        charactersIgnoringModifiers: nil,
+        shiftPressed: true
+    ) == nil)
+}
+
 @Test func canonAFInfo2UsesFocusedRectangleAndConvertsItsCoordinates() {
     let target = CanonAFMetadataReader.target(from: canonAFInfo2Fixture(
         focusedBitset: 0b10,
