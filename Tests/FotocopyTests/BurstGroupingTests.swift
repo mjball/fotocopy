@@ -93,6 +93,37 @@ import Testing
         "BL5A1003.CR3"
     ])
     #expect(scan.bursts[0].frames.map(\.disposition) == [nil, .select, .reject])
+    #expect(!scan.bursts[0].isReviewed)
+}
+
+@Test func burstIsReviewedOnlyWhenEveryFrameHasADecision() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let kept = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1001.CR3"),
+        filename: "BL5A1001.CR3",
+        captureDate: start,
+        dateSource: .exif,
+        sequenceNumber: 1001,
+        disposition: .select
+    )
+    let rejected = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1002.CR3"),
+        filename: "BL5A1002.CR3",
+        captureDate: start.addingTimeInterval(0.1),
+        dateSource: .exif,
+        sequenceNumber: 1002,
+        disposition: .reject
+    )
+    let unmarked = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1003.CR3"),
+        filename: "BL5A1003.CR3",
+        captureDate: start.addingTimeInterval(0.2),
+        dateSource: .exif,
+        sequenceNumber: 1003
+    )
+
+    #expect(PhotoBurst(frames: [kept, rejected]).isReviewed)
+    #expect(!PhotoBurst(frames: [kept, rejected, unmarked]).isReviewed)
 }
 
 @Test func inspectionPointUsesOnlyTheVisibleAspectFitImage() {

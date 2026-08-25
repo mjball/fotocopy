@@ -137,12 +137,21 @@ struct CullSidebarSections: View {
             if !scan.bursts.isEmpty {
                 Section("Bursts") {
                     ForEach(scan.bursts) { burst in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(burst.title)
-                                .lineLimit(1)
-                            Text("\(burst.frames.count) frames · \(captureRangeLabel(for: burst))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack(alignment: .center, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(burst.title)
+                                    .lineLimit(1)
+                                Text("\(burst.frames.count) frames · \(captureRangeLabel(for: burst))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            if burst.isReviewed {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .accessibilityLabel("Reviewed")
+                                    .help("Reviewed: every frame has been kept or rejected")
+                            }
                         }
                         .tag(FotocopySidebarDestination.burst(burst.id))
                     }
@@ -494,8 +503,6 @@ private struct BurstReviewView: View {
                 Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Toggle("Show camera AF target", isOn: $showsCameraAFTarget)
-                    .controlSize(.small)
                 if !model.isUsingCameraAFTarget {
                     Button("Use camera AF target") {
                         model.useCameraAFTarget()
@@ -622,9 +629,6 @@ private struct BurstReviewView: View {
                 .disabled(model.isMoving)
             }
 
-            Toggle("AF Target", isOn: $showsCameraAFTarget)
-                .toggleStyle(.button)
-
             Menu("More") {
                 if burst.frames.count > 1, selectedFrame != nil {
                     Button("Keep selected, reject \(burst.frames.count - 1)") {
@@ -644,7 +648,6 @@ private struct BurstReviewView: View {
                         model.clearInspectionPoint()
                     }
                 }
-                Toggle("Show camera AF target", isOn: $showsCameraAFTarget)
             }
             .disabled(model.isMoving)
         }

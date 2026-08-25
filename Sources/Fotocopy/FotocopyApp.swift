@@ -51,8 +51,23 @@ struct FotocopyApp: App {
                     )
                 }
                 .keyboardShortcut("3", modifiers: .command)
+
+                Divider()
+                Toggle("Show Camera AF Target", isOn: cameraAFTargetVisibility)
+                    .keyboardShortcut("a", modifiers: [.command, .option])
             }
         }
+    }
+
+    private var cameraAFTargetVisibility: Binding<Bool> {
+        Binding(
+            get: {
+                UserDefaults.standard.object(forKey: PreferenceKeys.cullShowsAFTarget) as? Bool ?? true
+            },
+            set: {
+                UserDefaults.standard.set($0, forKey: PreferenceKeys.cullShowsAFTarget)
+            }
+        )
     }
 
     private func checkForUpdates() {

@@ -138,6 +138,13 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
 
     var id: URL { frames[0].url }
     var firstFrame: CullPhoto { frames[0] }
+
+    /// A burst is reviewed only when every frame has an explicit, on-disk
+    /// decision. An unmarked frame deliberately leaves the burst unfinished.
+    var isReviewed: Bool {
+        !frames.isEmpty && frames.allSatisfy { $0.disposition != nil }
+    }
+
     var title: String {
         guard let lastFrame = frames.last, lastFrame.url != firstFrame.url else {
             return firstFrame.filename
