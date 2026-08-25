@@ -831,7 +831,8 @@ private struct CullInspectionPreviewView: View {
     @State private var image: NSImage?
     @State private var didFail = false
     @State private var fullPreview: NSImage?
-    @State private var fullPreviewDidFail = false
+    @State private var fullPreviewState: FullPreviewState = .idle
+    @State private var fullPreviewRetryCount = 0
     @GestureState private var gestureMagnification: CGFloat = 1
     @GestureState private var gestureTranslation: CGSize = .zero
 
@@ -840,7 +841,13 @@ private struct CullInspectionPreviewView: View {
     }
 
     private var fullPreviewRequestID: String {
-        effectiveZoom > 1.02 ? "\(url.path)#full-preview" : ""
+        guard effectiveZoom > 1.02,
+              image != nil,
+              fullPreview == nil,
+              fullPreviewState != .failed else {
+            return ""
+        }
+        return "\(url.path)#full-preview#\(fullPreviewRetryCount)"
     }
 
     var body: some View {
@@ -861,7 +868,8 @@ private struct CullInspectionPreviewView: View {
             image = nil
             didFail = false
             fullPreview = nil
-            fullPreviewDidFail = false
+            fullPreviewState = .idle
+            fullPreviewRetryCount = 0
             let loaded = await Task.detached(priority: .userInitiated) {
                 CullPreviewCache.shared.preview(for: url, maxPixelSize: CullPreviewSize.large.maxPixelSize)
             }.value
@@ -873,13 +881,18 @@ private struct CullInspectionPreviewView: View {
             guard !fullPreviewRequestID.isEmpty,
                   image != nil,
                   fullPreview == nil,
-                  !fullPreviewDidFail else { return }
-            let loaded = await Task.detached(priority: .userInitiated) {
-                CullPreviewCache.shared.fullPreview(for: url)
-            }.value
+                  fullPreviewState != .failed else { return }
+            let requestID = fullPreviewRequestID
+            fullPreviewState = .loading
+            let loaded = await CullPreviewCache.shared.fullPreview(for: url)
             guard !Task.isCancelled else { return }
-            fullPreview = loaded
-            fullPreviewDidFail = loaded == nil
+            guard fullPreviewRequestID == requestID else { return }
+            if let loaded {
+                fullPreview = loaded
+                fullPreviewState = .idle
+            } else {
+                fullPreviewState = .failed
+            }
         }
         .onChange(of: isPickingInspectionPoint) { _, isPicking in
             if isPicking {
@@ -992,16 +1005,36 @@ private struct CullInspectionPreviewView: View {
                 }
             }
 
-            if effectiveZoom > 1.02, fullPreview == nil, !fullPreviewDidFail {
-                Label("Loading full JPEG preview…", systemImage: "arrow.down.circle")
-                    .font(.caption)
-                    .padding(8)
-                    .background(.black.opacity(0.72), in: Capsule())
-                    .foregroundStyle(.white)
+            if effectiveZoom > 1.02, fullPreview == nil {
+                switch fullPreviewState {
+                case .idle, .loading:
+                    Label("Loading full JPEG preview…", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                        .padding(8)
+                        .background(.black.opacity(0.72), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .allowsHitTesting(false)
+                case .failed:
+                    Button {
+                        retryFullPreview()
+                    } label: {
+                        Label("Full JPEG preview unavailable — Retry", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                            .padding(8)
+                            .background(.black.opacity(0.72), in: Capsule())
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
                     .padding(10)
-                    .allowsHitTesting(false)
+                }
             }
         }
+    }
+
+    private func retryFullPreview() {
+        fullPreviewState = .idle
+        fullPreviewRetryCount += 1
     }
 
     private func panGesture(in containerSize: CGSize, imageSize: CGSize) -> some Gesture {
@@ -1074,6 +1107,39 @@ private struct CullInspectionPreviewView: View {
             x: Double(min(max(CGFloat(center.x), minimumX), maximumX)),
             y: Double(min(max(CGFloat(center.y), minimumY), maximumY))
         )
+    }
+}
+
+private enum FullPreviewState: Equatable {
+    case idle
+    case loading
+    case failed
+}
+
+/// Full-resolution previews can be large enough to saturate a slower external
+/// volume. This gate permits only one ImageIO decode at a time. A cancelled
+/// request that was waiting acquires and releases the gate without decoding,
+/// so rapid frame navigation cannot create a backlog of stale reads.
+private actor CullFullPreviewGate {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }
 
@@ -2127,6 +2193,7 @@ private final class CullPreviewCache: @unchecked Sendable {
     private let previews = NSCache<NSString, NSImage>()
     private let fullPreviews = NSCache<NSURL, NSImage>()
     private let focusCrops = NSCache<NSString, NSImage>()
+    private let fullPreviewGate = CullFullPreviewGate()
 
     /// Crop extraction can require decoding a much larger embedded JPEG than a
     /// normal cull preview. Keep that I/O bounded so a long burst does not
@@ -2150,12 +2217,31 @@ private final class CullPreviewCache: @unchecked Sendable {
         return image
     }
 
-    func fullPreview(for url: URL) -> NSImage? {
+    func fullPreview(for url: URL) async -> NSImage? {
         let key = url as NSURL
         if let cached = fullPreviews.object(forKey: key) { return cached }
-        guard let image = image(for: url, maxPixelSize: 16_384) else { return nil }
-        fullPreviews.setObject(image, forKey: key, cost: imageCost(image))
-        return image
+
+        await fullPreviewGate.acquire()
+        guard !Task.isCancelled else {
+            await fullPreviewGate.release()
+            return nil
+        }
+        if let cached = fullPreviews.object(forKey: key) {
+            await fullPreviewGate.release()
+            return cached
+        }
+
+        // ImageIO's CR3 decode cannot be interrupted once it begins, but the
+        // gate above prevents cancelled frame requests from starting another
+        // expensive decode while this one is in progress.
+        let decoded = await Task.detached(priority: .userInitiated) { [self] in
+            image(for: url, maxPixelSize: 16_384)
+        }.value
+        if let decoded {
+            fullPreviews.setObject(decoded, forKey: key, cost: imageCost(decoded))
+        }
+        await fullPreviewGate.release()
+        return decoded
     }
 
     func focusCrop(for url: URL, around point: CullInspectionPoint) -> NSImage? {
