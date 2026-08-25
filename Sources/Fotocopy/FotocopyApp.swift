@@ -7,11 +7,19 @@ struct FotocopyApp: App {
     @State private var isChecking = false
     @State private var cullModel = CullViewModel()
     @State private var cullReviewLayout: CullReviewLayout = .browse
+    @State private var driveTemperatureMonitor = ExternalDriveTemperatureMonitor()
     @AppStorage(PreferenceKeys.activeWorkspace) private var workspaceRaw = FotocopyWorkspace.importPhotos.rawValue
 
     var body: some Scene {
         WindowGroup {
-            FotocopyShellView(cullModel: cullModel, cullReviewLayout: $cullReviewLayout)
+            FotocopyShellView(
+                cullModel: cullModel,
+                cullReviewLayout: $cullReviewLayout,
+                driveTemperatureMonitor: driveTemperatureMonitor
+            )
+            .task {
+                driveTemperatureMonitor.start()
+            }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 980, height: 700)

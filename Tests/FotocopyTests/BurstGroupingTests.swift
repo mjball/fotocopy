@@ -247,6 +247,31 @@ import Testing
     ) == nil)
 }
 
+@Test func externalSSDTemperatureUsesSmartKelvinAndRejectsNonSSDs() throws {
+    let bar = try #require(ExternalDriveTemperatureReader.reading(
+        from: [
+            "Internal": false,
+            "SolidState": true,
+            "ParentWholeDisk": "disk5",
+            "VolumeName": "BAR",
+            "SMARTDeviceSpecificKeysMayVaryNotGuaranteed": ["TEMPERATURE": 321]
+        ],
+        mountURL: URL(fileURLWithPath: "/Volumes/BAR")
+    ))
+    #expect(bar.id == "disk5")
+    #expect(bar.volumeName == "BAR")
+    #expect(bar.temperatureCelsius == 48)
+
+    #expect(ExternalDriveTemperatureReader.reading(
+        from: ["Internal": true, "SolidState": true, "DeviceIdentifier": "disk0"],
+        mountURL: URL(fileURLWithPath: "/")
+    ) == nil)
+    #expect(ExternalDriveTemperatureReader.reading(
+        from: ["Internal": false, "SolidState": false, "DeviceIdentifier": "disk6"],
+        mountURL: URL(fileURLWithPath: "/Volumes/HDD")
+    ) == nil)
+}
+
 @Test func canonAFInfo2UsesFocusedRectangleAndConvertsItsCoordinates() {
     let target = CanonAFMetadataReader.target(from: canonAFInfo2Fixture(
         focusedBitset: 0b10,

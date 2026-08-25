@@ -46,6 +46,7 @@ struct FotocopyShellView: View {
     @Bindable var cullModel: CullViewModel
     @State private var sidebarSelection: FotocopySidebarDestination?
     @Binding var cullReviewLayout: CullReviewLayout
+    @Bindable var driveTemperatureMonitor: ExternalDriveTemperatureMonitor
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
 
     private var workspace: FotocopyWorkspace {
@@ -60,6 +61,11 @@ struct FotocopyShellView: View {
             workspaceDetail
         }
         .navigationTitle(workspace.windowTitle)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ExternalDriveTemperatureToolbarChip(monitor: driveTemperatureMonitor)
+            }
+        }
         .onAppear {
             if sidebarSelection == nil {
                 synchronizeSidebarSelectionWithWorkspace()
