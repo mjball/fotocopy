@@ -61,6 +61,40 @@ import Testing
     #expect(BurstGroupingEngine.sequenceNumber(in: URL(fileURLWithPath: "/tmp/IMG_7422.CR3")) == 7422)
 }
 
+@Test func scanRebuildsBurstAndCullStateFromDecisionFolders() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("fotocopy-burst-scan-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let selects = root.appendingPathComponent("Selects", isDirectory: true)
+    let rejects = root.appendingPathComponent("Rejects", isDirectory: true)
+    try FileManager.default.createDirectory(at: selects, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: rejects, withIntermediateDirectories: true)
+    try Data([0]).write(to: root.appendingPathComponent("BL5A1001.CR3"))
+    try Data([0]).write(to: selects.appendingPathComponent("BL5A1002.CR3"))
+    try Data([0]).write(to: rejects.appendingPathComponent("BL5A1003.CR3"))
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Elsewhere", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    try Data([0]).write(to: root.appendingPathComponent("Elsewhere/BL5A1004.CR3"))
+
+    let scan = try await BurstGroupingEngine.scan(
+        folder: root,
+        workerCount: 2,
+        progress: { _ in }
+    )
+
+    #expect(scan.cr3Count == 3)
+    #expect(scan.bursts.count == 1)
+    #expect(scan.bursts[0].frames.map(\.filename) == [
+        "BL5A1001.CR3",
+        "BL5A1002.CR3",
+        "BL5A1003.CR3"
+    ])
+    #expect(scan.bursts[0].frames.map(\.disposition) == [nil, .select, .reject])
+}
+
 @Test func inspectionPointUsesOnlyTheVisibleAspectFitImage() {
     let imageSize = CGSize(width: 4_000, height: 2_000)
     let containerSize = CGSize(width: 400, height: 400)
@@ -94,7 +128,7 @@ import Testing
     #expect(lowerRight == CGRect(x: 3_680, y: 1_680, width: 320, height: 320))
 }
 
-@Test func arrowNavigationMovesThroughBurstAndWrapsAtEachEnd() {
+@Test func arrowNavigationMovesThroughBurstAndStopsAtEachEnd() {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let frames = [
         makePhoto(number: 1, at: start),
@@ -111,12 +145,12 @@ import Testing
         in: frames,
         adjacentTo: frames[2].url,
         offset: 1
-    ) == frames[0].url)
+    ) == frames[2].url)
     #expect(CullFrameNavigation.frameURL(
         in: frames,
         adjacentTo: frames[0].url,
         offset: -1
-    ) == frames[2].url)
+    ) == frames[0].url)
 }
 
 @Test func canonAFInfo2UsesFocusedRectangleAndConvertsItsCoordinates() {

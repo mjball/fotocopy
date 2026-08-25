@@ -12,6 +12,11 @@ struct FotocopyApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 980, height: 700)
+
+        Settings {
+            FotocopySettingsView()
+        }
+
         .commands {
             CommandGroup(after: .appInfo) {
                 Button(isChecking ? "Checking..." : "Check for Updates...") {

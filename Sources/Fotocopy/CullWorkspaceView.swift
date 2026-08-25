@@ -7,28 +7,34 @@ struct CullWorkspaceView: View {
 
     var body: some View {
         detail
+        .task {
+            model.resumeLastScanIfNeeded()
+        }
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Menu("Recent Import") {
-                    if model.recentImportedFolders.isEmpty {
-                        Text("No completed Fotocopy import yet")
-                    } else {
-                        ForEach(model.recentImportedFolders, id: \.path) { folder in
-                            Button(folder.path) { model.requestUse(folder: folder) }
-                        }
+            if model.isScanning {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.cancel()
+                    } label: {
+                        Label("Cancel Scan", systemImage: "xmark")
                     }
+                    .labelStyle(.titleAndIcon)
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .help("Cancel the current burst scan")
                 }
-                    .disabled(model.isScanning || model.isApplying)
-
-                Button("Choose Folder…") { model.chooseFolder() }
-                    .keyboardShortcut("o", modifiers: .command)
-                    .disabled(model.isScanning || model.isApplying)
-
-                if model.isScanning {
-                    Button("Cancel") { model.cancel() }
-                } else if model.folderURL != nil {
-                    Button("Scan Again") { model.scan() }
-                        .disabled(model.isApplying)
+            } else if model.folderURL != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.scan()
+                    } label: {
+                        Label("Rescan", systemImage: "arrow.clockwise")
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .disabled(model.isMoving)
+                    .help("Scan this folder again for bursts")
                 }
             }
         }
@@ -37,27 +43,10 @@ struct CullWorkspaceView: View {
         } message: {
             Text(model.errorMessage ?? "Unknown error")
         }
-        .alert(model.applyConfirmationTitle, isPresented: $model.showApplyConfirmation) {
-            Button(model.applyButtonLabel) { model.applyConfirmedChanges() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text(model.applyConfirmationMessage)
-        }
-        .confirmationDialog(
-            "Apply or discard cull changes?",
-            isPresented: $model.showPendingChangesConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(model.applyButtonLabel) { model.applyPendingChangesAndContinue() }
-            Button("Discard changes", role: .destructive) { model.discardPendingChangesAndContinue() }
-            Button("Cancel", role: .cancel) { model.cancelPendingChangesConfirmation() }
-        } message: {
-            Text("\(model.applyConfirmationMessage) You can also discard these local marks; nothing has moved yet.")
-        }
-        .alert("Could not apply cull changes", isPresented: $model.showApplyError) {
+        .alert("Could not move cull frame", isPresented: $model.showMoveError) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text(model.applyErrorMessage ?? "Unknown error")
+            Text(model.moveErrorMessage ?? "Unknown error")
         }
     }
 
@@ -67,14 +56,14 @@ struct CullWorkspaceView: View {
             ContentUnavailableView(
                 "Finding bursts",
                 systemImage: "rectangle.stack.badge.play",
-                description: Text("Fotocopy reads only the selected folder and leaves all files untouched."))
+                description: Text("Fotocopy reads this date folder plus Selects and Rejects, then rebuilds your burst review from the files on disk."))
         } else if let burst = model.selectedBurst {
             BurstReviewView(burst: burst, model: model)
         } else if let scan = model.scanResult, scan.cr3Count == 0 {
             ContentUnavailableView(
                 "No CR3 files in this folder",
                 systemImage: "camera.metering.none",
-                description: Text("Cull currently reviews CR3 files directly in one selected destination folder."))
+                description: Text("Cull looks for CR3 files in this destination date folder, plus its Selects and Rejects subfolders."))
         } else if let scan = model.scanResult, scan.bursts.isEmpty {
             ContentUnavailableView(
                 "No bursts found",
@@ -108,27 +97,7 @@ struct CullSidebarSections: View {
                     .foregroundStyle(.secondary)
             }
 
-            Button("Choose Folder…") { model.chooseFolder() }
-                .disabled(model.isScanning || model.isApplying)
-
-            Menu("Recent Import") {
-                if model.recentImportedFolders.isEmpty {
-                    Text("No completed Fotocopy import yet")
-                } else {
-                    ForEach(model.recentImportedFolders, id: \.path) { folder in
-                            Button(folder.path) { model.requestUse(folder: folder) }
-                    }
-                }
-            }
-            .disabled(model.isScanning || model.isApplying)
-
-            Picker("Scan workers", selection: $model.workerCount) {
-                Text("1").tag(1)
-                Text("2").tag(2)
-                Text("4").tag(4)
-                Text("6").tag(6)
-            }
-            .disabled(model.isScanning || model.isApplying)
+            sourcePickerControls
         }
 
         if model.isScanning {
@@ -181,6 +150,44 @@ struct CullSidebarSections: View {
         }
     }
 
+    @ViewBuilder
+    private var sourcePickerControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                recentImportMenu
+                chooseFolderButton
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            VStack(alignment: .leading, spacing: 8) {
+                recentImportMenu
+                chooseFolderButton
+            }
+        }
+    }
+
+    private var recentImportMenu: some View {
+        Menu("Recent Import") {
+            if model.recentImportedFolders.isEmpty {
+                Text("No completed Fotocopy import yet")
+            } else {
+                ForEach(model.recentImportedFolders, id: \.path) { folder in
+                    Button(folder.path) { model.requestUse(folder: folder) }
+                }
+            }
+        }
+        .controlSize(.small)
+        .disabled(model.isScanning || model.isMoving)
+    }
+
+    private var chooseFolderButton: some View {
+        Button("Choose Folder…") { model.chooseFolder() }
+            .keyboardShortcut("o", modifiers: .command)
+            .controlSize(.small)
+            .buttonStyle(.bordered)
+            .disabled(model.isScanning || model.isMoving)
+    }
+
     private func scanSummary(_ scan: CullFolderScan) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("\(scan.bursts.count) burst\(scan.bursts.count == 1 ? "" : "s") found")
@@ -212,6 +219,12 @@ struct CullSidebarSections: View {
 private struct BurstReviewView: View {
     let burst: PhotoBurst
     @Bindable var model: CullViewModel
+    @AppStorage(PreferenceKeys.cullPreviewHeight) private var previewHeight = 540.0
+    @State private var previewHeightAtDragStart: Double?
+
+    private let defaultPreviewHeight = 540.0
+    private let minimumPreviewHeight = 360.0
+    private let maximumPreviewHeight = 1_200.0
 
     private var selectedFrame: CullPhoto? {
         burst.frames.first { $0.url == model.selectedFrameURL } ?? burst.frames.first
@@ -224,6 +237,18 @@ private struct BurstReviewView: View {
     }
 
     var body: some View {
+        ScrollView {
+            reviewContent
+        }
+        .background {
+            CullFrameNavigationKeyHandler { offset in
+                model.moveSelectedFrame(in: burst, by: offset)
+            }
+            .frame(width: 0, height: 0)
+        }
+    }
+
+    private var reviewContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -248,8 +273,12 @@ private struct BurstReviewView: View {
                         onInspectionPointSelected: model.setInspectionPoint
                     )
                     .id(selectedFrame.url)
-                    .frame(maxWidth: .infinity, minHeight: 430, maxHeight: 540)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: resolvedPreviewHeight,
+                        maxHeight: resolvedPreviewHeight
+                    )
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text(selectedFrame.filename)
@@ -260,15 +289,17 @@ private struct BurstReviewView: View {
 
                         Divider()
 
-                        Button(model.isKeeping(selectedFrame.url) ? "Marked to keep" : "Mark to keep") {
+                        Button(model.isKeeping(selectedFrame.url) ? "Kept — undo" : "Keep") {
                             model.toggleKeeping(selectedFrame.url)
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(model.isMoving)
 
-                        Button(model.isRejecting(selectedFrame.url) ? "Marked as reject" : "Mark as reject") {
+                        Button(model.isRejecting(selectedFrame.url) ? "Rejected — undo" : "Reject") {
                             model.toggleRejecting(selectedFrame.url)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(model.isMoving)
 
                         Divider()
 
@@ -313,7 +344,7 @@ private struct BurstReviewView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text("Marks stay local until Apply. Applied selects and rejects move into matching subfolders; unmarked frames stay here.")
+                        Text("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -322,14 +353,30 @@ private struct BurstReviewView: View {
                 }
             }
 
+            CullPreviewHeightResizeHandle(
+                onChanged: resizePreview,
+                onEnded: { previewHeightAtDragStart = nil },
+                onReset: {
+                    previewHeight = defaultPreviewHeight
+                    previewHeightAtDragStart = nil
+                }
+            )
+
             HStack {
                 Text("Frames")
                     .font(.headline)
                 Spacer()
+                if burst.frames.count > 1, selectedFrame != nil {
+                    Button("Keep selected, reject \(burst.frames.count - 1)") {
+                        model.keepSelectedAndRejectRest(in: burst)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
                 Button("Keep all") { model.markAllKeeping(in: burst) }
                 Button("Reject all") { model.markAllRejecting(in: burst) }
-                Button("Clear selection") { model.clearKeeping(in: burst) }
+                Button("Clear marks") { model.clearDispositions(in: burst) }
             }
+            .disabled(model.isMoving)
 
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 10) {
@@ -391,27 +438,33 @@ private struct BurstReviewView: View {
                 .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            Spacer(minLength: 0)
-
             HStack(spacing: 10) {
-                if let summary = model.lastApplySummary {
+                if model.isMoving {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Moving cull frame\(model.movingFrameCount == 1 ? "" : "s")…")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else if let summary = model.lastMoveSummary {
                     Label(summary, systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     Label(
-                        model.hasPendingCullChanges
-                            ? "Changes have not been applied yet."
-                            : "Mark explicit selects or rejects; unmarked frames stay in place.",
-                        systemImage: model.hasPendingCullChanges ? "exclamationmark.circle" : "hand.point.up.left"
+                        "Keep and Reject move files immediately; unmarked frames stay in this folder.",
+                        systemImage: "hand.point.up.left"
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(model.applyButtonLabel) { model.requestApply() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.hasPendingCullChanges || model.isApplying)
+                if model.canUndoLastMove {
+                    Button("Undo") { model.undoLastMove() }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isMoving)
+                }
             }
         }
         .padding(24)
@@ -421,12 +474,26 @@ private struct BurstReviewView: View {
                 CullPreviewCache.shared.prefetch(burst.frames.map(\.url))
             }.value
         }
-        .background {
-            CullFrameNavigationKeyHandler { offset in
-                model.moveSelectedFrame(in: burst, by: offset)
-            }
-            .frame(width: 0, height: 0)
+    }
+
+    private func resizePreview(by translation: CGFloat) {
+        if previewHeightAtDragStart == nil {
+            previewHeightAtDragStart = previewHeight
         }
+        let startingHeight = previewHeightAtDragStart ?? previewHeight
+        previewHeight = min(
+            max(startingHeight + Double(translation), minimumPreviewHeight),
+            maximumPreviewHeight
+        )
+    }
+
+    private var resolvedPreviewHeight: CGFloat {
+        CGFloat(
+            min(
+                max(previewHeight, minimumPreviewHeight),
+                maximumPreviewHeight
+            )
+        )
     }
 
     private func captureLabel(_ frame: CullPhoto) -> String {
@@ -442,6 +509,41 @@ private struct BurstReviewView: View {
             return "Uses each frame’s camera-recorded AF target. It may be a subject area, not a precise eye."
         }
         return "Choose a detail to compare the same image area across every frame."
+    }
+}
+
+private struct CullPreviewHeightResizeHandle: View {
+    let onChanged: (CGFloat) -> Void
+    let onEnded: () -> Void
+    let onReset: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Rectangle()
+            .fill(isHovering ? Color.accentColor.opacity(0.28) : Color.clear)
+            .frame(height: 10)
+            .overlay {
+                Capsule()
+                    .fill(isHovering ? Color.accentColor : Color.secondary.opacity(0.52))
+                    .frame(width: 38, height: 3)
+            }
+            .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        onChanged(value.translation.height)
+                    }
+                    .onEnded { _ in
+                        onEnded()
+                    }
+            )
+            .onTapGesture(count: 2) {
+                onReset()
+            }
+            .accessibilityLabel("Preview height")
+            .accessibilityHint("Drag vertically to resize the photo preview. Double-click to reset.")
+            .help("Drag to resize the preview. Double-click to reset.")
     }
 }
 
@@ -885,11 +987,20 @@ private struct CullFrameNavigationKeyHandler: NSViewRepresentable {
     }
 }
 
+private struct CullFrameDispositionState: Sendable {
+    let frameURL: URL
+    let disposition: CullDisposition?
+}
+
+private struct CullUndoOperation: Sendable {
+    let restoreStates: [CullFrameDispositionState]
+    let movedFrameCount: Int
+}
+
 @Observable
 @MainActor
 final class CullViewModel {
     var folderURL: URL?
-    var workerCount = 4
     var scanResult: CullFolderScan?
     var isScanning = false
     var progressCompleted = 0
@@ -897,12 +1008,11 @@ final class CullViewModel {
     var currentFilename = ""
     var errorMessage: String?
     var showError = false
-    var applyErrorMessage: String?
-    var showApplyError = false
-    var showApplyConfirmation = false
-    var showPendingChangesConfirmation = false
-    var isApplying = false
-    var lastApplySummary: String?
+    var moveErrorMessage: String?
+    var showMoveError = false
+    var isMoving = false
+    var movingFrameCount = 0
+    var lastMoveSummary: String?
     var selectedBurstID: URL?
     var selectedFrameURL: URL?
     var inspectionSource: CullInspectionSource?
@@ -913,8 +1023,7 @@ final class CullViewModel {
     private(set) var loadingCameraAFTargetURLs: Set<URL> = []
 
     private var scanTask: Task<Void, Never>?
-    private var pendingContinuation: (() -> Void)?
-    private var pendingCancellation: (() -> Void)?
+    private var lastUndoOperation: CullUndoOperation?
 
     init() {
         if let path = UserDefaults.standard.string(forKey: PreferenceKeys.lastCullFolder) {
@@ -933,28 +1042,7 @@ final class CullViewModel {
         scanResult?.bursts.first { $0.id == selectedBurstID }
     }
 
-    var hasPendingCullChanges: Bool { !dispositions.isEmpty }
-    var selectCount: Int { dispositions.values.filter { $0 == .select }.count }
-    var rejectCount: Int { dispositions.values.filter { $0 == .reject }.count }
-    var markedFrameCount: Int { dispositions.count }
-
-    var applyConfirmationTitle: String {
-        "Apply \(markedFrameCount) cull \(markedFrameCount == 1 ? "change" : "changes")?"
-    }
-
-    var applyConfirmationMessage: String {
-        let moves = [
-            selectCount > 0 ? "\(selectCount) to Selects" : nil,
-            rejectCount > 0 ? "\(rejectCount) to Rejects" : nil
-        ]
-        .compactMap { $0 }
-        .joined(separator: " and ")
-        return "This moves \(moves). Every unmarked frame stays where it is. Nothing is deleted."
-    }
-
-    var applyButtonLabel: String {
-        "Move \(markedFrameCount) \(markedFrameCount == 1 ? "frame" : "frames")"
-    }
+    var canUndoLastMove: Bool { lastUndoOperation != nil && !isMoving }
 
     /// A manual choice takes precedence. Camera AF mode resolves the target
     /// separately for every frame, so the crop can follow a moving subject.
@@ -972,7 +1060,7 @@ final class CullViewModel {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Review Folder"
-        panel.message = "Choose one Fotocopy destination folder containing CR3 photos. Fotocopy only moves explicit selects or rejects after you confirm Apply."
+        panel.message = "Choose one Fotocopy destination folder containing CR3 photos. Fotocopy moves only the Keep or Reject choices you make; nothing is deleted."
         if let folderURL {
             panel.directoryURL = folderURL
         }
@@ -982,9 +1070,7 @@ final class CullViewModel {
     }
 
     func requestUse(folder: URL) {
-        requestContinuation { [weak self] in
-            self?.use(folder: folder)
-        }
+        use(folder: folder)
     }
 
     private func use(folder: URL) {
@@ -994,16 +1080,24 @@ final class CullViewModel {
     }
 
     func scan() {
-        requestContinuation { [weak self] in
-            self?.startScan()
-        }
+        startScan()
+    }
+
+    /// The last reviewed date folder is retained between launches. Start a
+    /// fresh, disk-based scan when Cull first appears instead of persisting a
+    /// transient burst list.
+    func resumeLastScanIfNeeded() {
+        guard folderURL != nil, scanResult == nil, !isScanning, !isMoving else { return }
+        startScan()
     }
 
     private func startScan() {
-        guard let folderURL, !isScanning else { return }
+        guard let folderURL, !isScanning, !isMoving else { return }
         scanTask?.cancel()
         scanResult = nil
         dispositions.removeAll()
+        lastUndoOperation = nil
+        lastMoveSummary = nil
         selectedBurstID = nil
         selectedFrameURL = nil
         inspectionSource = nil
@@ -1018,7 +1112,7 @@ final class CullViewModel {
         errorMessage = nil
 
         let model = self
-        let workers = workerCount
+        let workers = CullSettings.scanWorkerCount
         scanTask = Task {
             do {
                 let result = try await Task.detached(priority: .userInitiated) {
@@ -1036,6 +1130,7 @@ final class CullViewModel {
 
                 guard !Task.isCancelled else { return }
                 scanResult = result
+                dispositions = Self.onDiskDispositions(in: result)
                 selectedBurstID = result.bursts.first?.id
                 selectedFrameURL = result.bursts.first?.frames.first?.url
             } catch is CancellationError {
@@ -1054,108 +1149,6 @@ final class CullViewModel {
         scanTask = nil
         isScanning = false
         currentFilename = "Cancelled"
-    }
-
-    func requestLeavingCull(
-        onContinue: @escaping () -> Void,
-        onCancel: @escaping () -> Void = {}
-    ) {
-        requestContinuation(onContinue, onCancel: onCancel)
-    }
-
-    func requestApply() {
-        guard hasPendingCullChanges, !isApplying else { return }
-        showApplyConfirmation = true
-    }
-
-    func applyConfirmedChanges() {
-        showApplyConfirmation = false
-        applyMarkedFrames(then: pendingContinuation)
-    }
-
-    func applyPendingChangesAndContinue() {
-        showPendingChangesConfirmation = false
-        applyMarkedFrames(then: pendingContinuation)
-    }
-
-    func discardPendingChangesAndContinue() {
-        dispositions.removeAll()
-        finishPendingContinuation()
-    }
-
-    func cancelPendingChangesConfirmation() {
-        showPendingChangesConfirmation = false
-        let cancellation = pendingCancellation
-        pendingContinuation = nil
-        pendingCancellation = nil
-        cancellation?()
-    }
-
-    private func requestContinuation(
-        _ continuation: @escaping () -> Void,
-        onCancel: @escaping () -> Void = {}
-    ) {
-        guard hasPendingCullChanges else {
-            continuation()
-            return
-        }
-        pendingContinuation = continuation
-        pendingCancellation = onCancel
-        showPendingChangesConfirmation = true
-    }
-
-    private func applyMarkedFrames(then continuation: (() -> Void)?) {
-        guard let folderURL, hasPendingCullChanges, !isApplying else { return }
-
-        let markedDispositions = dispositions
-        isApplying = true
-        applyErrorMessage = nil
-
-        Task { [weak self] in
-            do {
-                let plan = try await Task.detached(priority: .userInitiated) {
-                    try CullApplyEngine.makePlan(
-                        folderURL: folderURL,
-                        dispositions: markedDispositions
-                    )
-                }.value
-                let result = try await Task.detached(priority: .userInitiated) {
-                    try CullApplyEngine.apply(plan)
-                }.value
-
-                guard !Task.isCancelled, let self else { return }
-                self.dispositions.removeAll()
-                self.isApplying = false
-                self.lastApplySummary = Self.applySummary(for: result)
-                if continuation != nil {
-                    self.finishPendingContinuation()
-                } else {
-                    self.startScan()
-                }
-            } catch {
-                guard let self else { return }
-                self.isApplying = false
-                self.applyErrorMessage = error.localizedDescription
-                self.showApplyError = true
-            }
-        }
-    }
-
-    private func finishPendingContinuation() {
-        let continuation = pendingContinuation
-        pendingContinuation = nil
-        pendingCancellation = nil
-        continuation?()
-    }
-
-    private static func applySummary(for result: CullApplyResult) -> String {
-        var parts: [String] = []
-        if result.selectCount > 0 { parts.append("\(result.selectCount) moved to Selects") }
-        if result.rejectCount > 0 { parts.append("\(result.rejectCount) moved to Rejects") }
-        if result.companionFileCount > 0 {
-            parts.append("\(result.companionFileCount) companion \(result.companionFileCount == 1 ? "file" : "files") moved")
-        }
-        return parts.joined(separator: " · ")
     }
 
     func syncSelectedFrame() {
@@ -1296,41 +1289,258 @@ final class CullViewModel {
     }
 
     func toggleKeeping(_ url: URL) {
-        lastApplySummary = nil
-        if isKeeping(url) {
-            dispositions.removeValue(forKey: url)
-        } else {
-            dispositions[url] = .select
-        }
+        let disposition: CullDisposition? = isKeeping(url) ? nil : .select
+        moveDisposition(of: url, to: disposition, advanceAfterMove: disposition != nil)
     }
 
     func toggleRejecting(_ url: URL) {
-        lastApplySummary = nil
-        if isRejecting(url) {
-            dispositions.removeValue(forKey: url)
-        } else {
-            dispositions[url] = .reject
+        let disposition: CullDisposition? = isRejecting(url) ? nil : .reject
+        moveDisposition(of: url, to: disposition, advanceAfterMove: disposition != nil)
+    }
+
+    func keepSelectedAndRejectRest(in burst: PhotoBurst) {
+        guard let selectedFrameURL,
+              burst.frames.contains(where: { $0.url == selectedFrameURL }) else {
+            return
         }
+        moveDispositions(
+            burst.frames.map {
+                CullFrameDispositionState(
+                    frameURL: $0.url,
+                    disposition: $0.url == selectedFrameURL ? .select : .reject
+                )
+            }
+        )
     }
 
     func markAllKeeping(in burst: PhotoBurst) {
-        lastApplySummary = nil
-        for frame in burst.frames {
-            dispositions[frame.url] = .select
-        }
+        moveDispositions(
+            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .select) }
+        )
     }
 
     func markAllRejecting(in burst: PhotoBurst) {
-        lastApplySummary = nil
-        for frame in burst.frames {
-            dispositions[frame.url] = .reject
+        moveDispositions(
+            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .reject) }
+        )
+    }
+
+    func clearDispositions(in burst: PhotoBurst) {
+        moveDispositions(
+            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: nil) }
+        )
+    }
+
+    func undoLastMove() {
+        guard let lastUndoOperation, !isMoving else { return }
+        moveDispositions(lastUndoOperation.restoreStates, recordsUndo: false)
+    }
+
+    private func moveDisposition(
+        of url: URL,
+        to disposition: CullDisposition?,
+        advanceAfterMove: Bool = false
+    ) {
+        moveDispositions(
+            [CullFrameDispositionState(frameURL: url, disposition: disposition)],
+            advanceAfterMoving: advanceAfterMove ? url : nil
+        )
+    }
+
+    private func moveDispositions(
+        _ requestedStates: [CullFrameDispositionState],
+        recordsUndo: Bool = true,
+        advanceAfterMoving frameURL: URL? = nil
+    ) {
+        guard let folderURL, !isMoving else { return }
+
+        let changedStates = requestedStates.filter {
+            dispositions[$0.frameURL] != $0.disposition
+        }
+        guard !changedStates.isEmpty else { return }
+
+        let previousStates = changedStates.map {
+            CullFrameDispositionState(frameURL: $0.frameURL, disposition: dispositions[$0.frameURL])
+        }
+        let relocations = changedStates.map {
+            CullFrameRelocation(
+                sourceURL: $0.frameURL,
+                destinationURL: destinationURL(for: $0.frameURL, disposition: $0.disposition, in: folderURL)
+            )
+        }
+        let relocationCount = relocations.filter { $0.sourceURL != $0.destinationURL }.count
+        guard relocationCount > 0 else { return }
+        let nextFrameURL = frameURL.flatMap { self.nextFrameURL(after: $0) }
+
+        isMoving = true
+        movingFrameCount = relocationCount
+        moveErrorMessage = nil
+
+        Task { [weak self] in
+            do {
+                let plan = try await Task.detached(priority: .userInitiated) {
+                    try CullApplyEngine.makePlan(folderURL: folderURL, rawRelocations: relocations)
+                }.value
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try CullApplyEngine.apply(plan)
+                }.value
+
+                guard !Task.isCancelled, let self else { return }
+                self.rewriteFrameURLs(using: result.rawRelocations)
+                self.applyDispositionStates(changedStates, after: result.rawRelocations)
+                if let nextFrameURL {
+                    let destinationBySource = Dictionary(
+                        uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
+                    )
+                    self.selectedFrameURL = destinationBySource[nextFrameURL] ?? nextFrameURL
+                }
+                self.isMoving = false
+                self.movingFrameCount = 0
+
+                if recordsUndo {
+                    let destinationBySource = Dictionary(
+                        uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
+                    )
+                    let restoreStates = previousStates.compactMap { previousState in
+                        destinationBySource[previousState.frameURL].map {
+                            CullFrameDispositionState(frameURL: $0, disposition: previousState.disposition)
+                        }
+                    }
+                    self.lastUndoOperation = CullUndoOperation(
+                        restoreStates: restoreStates,
+                        movedFrameCount: result.rawRelocations.count
+                    )
+                    self.lastMoveSummary = Self.moveSummary(
+                        for: changedStates,
+                        companionFileCount: result.companionFileCount
+                    )
+                } else {
+                    self.lastUndoOperation = nil
+                    self.lastMoveSummary = "Undid \(result.rawRelocations.count) \(result.rawRelocations.count == 1 ? "move" : "moves")"
+                }
+            } catch {
+                guard let self else { return }
+                self.isMoving = false
+                self.movingFrameCount = 0
+                self.moveErrorMessage = error.localizedDescription
+                self.showMoveError = true
+            }
         }
     }
 
-    func clearKeeping(in burst: PhotoBurst) {
-        for frame in burst.frames {
-            dispositions.removeValue(forKey: frame.url)
+    private func nextFrameURL(after frameURL: URL) -> URL? {
+        guard let burst = selectedBurst,
+              burst.frames.contains(where: { $0.url == frameURL }) else {
+            return nil
         }
+        return CullFrameNavigation.frameURL(
+            in: burst.frames,
+            adjacentTo: frameURL,
+            offset: 1
+        )
+    }
+
+    private func destinationURL(
+        for sourceURL: URL,
+        disposition: CullDisposition?,
+        in folderURL: URL
+    ) -> URL {
+        let destinationFolder = disposition.map {
+            folderURL.appendingPathComponent($0.destinationFolderName, isDirectory: true)
+        } ?? folderURL
+        return destinationFolder.appendingPathComponent(sourceURL.lastPathComponent)
+    }
+
+    private func applyDispositionStates(
+        _ states: [CullFrameDispositionState],
+        after relocations: [CullFrameRelocation]
+    ) {
+        let destinationBySource = Dictionary(
+            uniqueKeysWithValues: relocations.map { ($0.sourceURL, $0.destinationURL) }
+        )
+        for state in states {
+            let currentURL = destinationBySource[state.frameURL] ?? state.frameURL
+            if let disposition = state.disposition {
+                dispositions[currentURL] = disposition
+            } else {
+                dispositions.removeValue(forKey: currentURL)
+            }
+        }
+    }
+
+    private func rewriteFrameURLs(using relocations: [CullFrameRelocation]) {
+        let destinationBySource = Dictionary(
+            uniqueKeysWithValues: relocations.map { ($0.sourceURL, $0.destinationURL) }
+        )
+        func rewrittenURL(_ url: URL) -> URL {
+            destinationBySource[url] ?? url
+        }
+        func rewrittenPhoto(_ photo: CullPhoto) -> CullPhoto {
+            let updatedURL = rewrittenURL(photo.url)
+            return CullPhoto(
+                url: updatedURL,
+                filename: photo.filename,
+                captureDate: photo.captureDate,
+                dateSource: photo.dateSource,
+                sequenceNumber: photo.sequenceNumber,
+                disposition: folderURL.flatMap {
+                    CullDisposition.inferred(from: updatedURL, in: $0)
+                }
+            )
+        }
+
+        if let scan = scanResult {
+            scanResult = CullFolderScan(
+                folder: scan.folder,
+                cr3Count: scan.cr3Count,
+                unreadableMetadataCount: scan.unreadableMetadataCount,
+                bursts: scan.bursts.map { PhotoBurst(frames: $0.frames.map(rewrittenPhoto)) },
+                singleFrames: scan.singleFrames.map(rewrittenPhoto),
+                duration: scan.duration
+            )
+        }
+
+        selectedBurstID = selectedBurstID.map(rewrittenURL)
+        selectedFrameURL = selectedFrameURL.map(rewrittenURL)
+        dispositions = rewriteDictionary(dispositions, using: destinationBySource)
+        cameraAFTargets = rewriteDictionary(cameraAFTargets, using: destinationBySource)
+        loadedCameraAFTargetURLs = Set(loadedCameraAFTargetURLs.map(rewrittenURL))
+        loadingCameraAFTargetURLs = Set(loadingCameraAFTargetURLs.map(rewrittenURL))
+    }
+
+    private static func onDiskDispositions(in scan: CullFolderScan) -> [URL: CullDisposition] {
+        let frames = scan.bursts.flatMap(\.frames) + scan.singleFrames
+        return Dictionary(
+            uniqueKeysWithValues: frames.compactMap { frame in
+                frame.disposition.map { (frame.url, $0) }
+            }
+        )
+    }
+
+    private func rewriteDictionary<Value>(
+        _ dictionary: [URL: Value],
+        using replacements: [URL: URL]
+    ) -> [URL: Value] {
+        Dictionary(uniqueKeysWithValues: dictionary.map { url, value in
+            (replacements[url] ?? url, value)
+        })
+    }
+
+    private static func moveSummary(
+        for states: [CullFrameDispositionState],
+        companionFileCount: Int
+    ) -> String {
+        var parts: [String] = []
+        let selectCount = states.filter { $0.disposition == .select }.count
+        let rejectCount = states.filter { $0.disposition == .reject }.count
+        let restoredCount = states.filter { $0.disposition == nil }.count
+        if selectCount > 0 { parts.append("\(selectCount) moved to Selects") }
+        if rejectCount > 0 { parts.append("\(rejectCount) moved to Rejects") }
+        if restoredCount > 0 { parts.append("\(restoredCount) returned to this date folder") }
+        if companionFileCount > 0 {
+            parts.append("\(companionFileCount) companion \(companionFileCount == 1 ? "file" : "files") moved")
+        }
+        return parts.joined(separator: " · ")
     }
 
     func revealFolder() {

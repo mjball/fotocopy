@@ -28,11 +28,10 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
     }
 }
 
-/// Import is a peer workspace; an individual burst is the selectable leaf
-/// within Cull. The Cull workspace itself is intentionally not a competing
-/// sidebar selection when one of its bursts is active.
+/// An individual burst is the selectable leaf within Cull. App-level tasks
+/// render their active state independently, so Cull can remain active while a
+/// burst is selected below it.
 enum FotocopySidebarDestination: Hashable {
-    case workspace(FotocopyWorkspace)
     case burst(URL)
 }
 
@@ -56,7 +55,6 @@ struct FotocopyShellView: View {
         }
         .navigationTitle(workspace.windowTitle)
         .onAppear {
-            CullApplicationLifecycle.activeModel = cullModel
             if sidebarSelection == nil {
                 synchronizeSidebarSelectionWithWorkspace()
             }
@@ -65,29 +63,7 @@ struct FotocopyShellView: View {
             applySidebarSelection(selection)
         }
         .onChange(of: workspaceRaw) { previousRawValue, currentRawValue in
-            guard let previousWorkspace = FotocopyWorkspace(rawValue: previousRawValue),
-                  let currentWorkspace = FotocopyWorkspace(rawValue: currentRawValue),
-                  previousWorkspace == .cullBursts,
-                  currentWorkspace != .cullBursts,
-                  cullModel.hasPendingCullChanges else {
-                synchronizeSidebarSelectionWithWorkspace()
-                return
-            }
-
-            // App menu commands write the workspace preference directly. Put
-            // the UI back on Cull before offering the same Apply/Discard/Cancel
-            // choice used by the sidebar.
-            workspace = previousWorkspace
-            sidebarSelection = currentCullSidebarDestination
-            cullModel.requestLeavingCull(
-                onContinue: {
-                    workspace = currentWorkspace
-                    synchronizeSidebarSelectionWithWorkspace()
-                },
-                onCancel: {
-                    sidebarSelection = currentCullSidebarDestination
-                }
-            )
+            synchronizeSidebarSelectionWithWorkspace()
         }
         .onChange(of: cullModel.selectedBurstID) { _, burstID in
             guard workspace == .cullBursts, let burstID else { return }
@@ -97,14 +73,17 @@ struct FotocopyShellView: View {
 
     private var workspaceSidebar: some View {
         List(selection: $sidebarSelection) {
-            Section("Workspaces") {
-                Label(FotocopyWorkspace.importPhotos.title, systemImage: FotocopyWorkspace.importPhotos.symbolName)
-                    .tag(FotocopySidebarDestination.workspace(.importPhotos))
-                Button(action: activateCull) {
-                    Label(FotocopyWorkspace.cullBursts.title, systemImage: FotocopyWorkspace.cullBursts.symbolName)
-                        .font(workspace == .cullBursts ? .body.weight(.semibold) : .body)
-                }
-                .buttonStyle(.plain)
+            Section("Tasks") {
+                TaskSidebarRow(
+                    task: .importPhotos,
+                    isActive: workspace == .importPhotos,
+                    action: activateImport
+                )
+                TaskSidebarRow(
+                    task: .cullBursts,
+                    isActive: workspace == .cullBursts,
+                    action: activateCull
+                )
             }
 
             if workspace == .cullBursts {
@@ -129,24 +108,6 @@ struct FotocopyShellView: View {
         guard let selection else { return }
 
         switch selection {
-        case .workspace(let selectedWorkspace):
-            guard selectedWorkspace == .importPhotos else { return }
-            guard workspace == .cullBursts,
-                  cullModel.hasPendingCullChanges else {
-                workspace = selectedWorkspace
-                return
-            }
-
-            sidebarSelection = currentCullSidebarDestination
-            cullModel.requestLeavingCull(
-                onContinue: {
-                    workspace = selectedWorkspace
-                    synchronizeSidebarSelectionWithWorkspace()
-                },
-                onCancel: {
-                    sidebarSelection = currentCullSidebarDestination
-                }
-            )
         case .burst(let burstID):
             workspace = .cullBursts
             cullModel.selectedBurstID = burstID
@@ -160,9 +121,7 @@ struct FotocopyShellView: View {
             sidebarSelection = .burst(burstID)
             return
         }
-        sidebarSelection = storedWorkspace == .importPhotos
-            ? .workspace(.importPhotos)
-            : nil
+        sidebarSelection = nil
     }
 
     private var currentCullSidebarDestination: FotocopySidebarDestination? {
@@ -172,5 +131,33 @@ struct FotocopyShellView: View {
     private func activateCull() {
         guard workspace != .cullBursts else { return }
         workspace = .cullBursts
+    }
+
+    private func activateImport() {
+        guard workspace != .importPhotos else { return }
+        workspace = .importPhotos
+        sidebarSelection = nil
+    }
+}
+
+private struct TaskSidebarRow: View {
+    let task: FotocopyWorkspace
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(task.title, systemImage: task.symbolName)
+                .font(isActive ? .body.weight(.semibold) : .body)
+                .foregroundStyle(isActive ? Color.white : Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isActive ? Color.accentColor : Color.clear)
+        }
     }
 }

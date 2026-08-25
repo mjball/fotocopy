@@ -96,6 +96,26 @@ struct CullPhoto: Identifiable, Sendable, Hashable {
     let captureDate: Date?
     let dateSource: DateSource?
     let sequenceNumber: Int?
+    /// This is inferred from the file's location at scan time, rather than
+    /// written to a catalog or sidecar. It lets a subsequent scan rebuild the
+    /// visual Keep/Reject state from the date folder on disk.
+    let disposition: CullDisposition?
+
+    init(
+        url: URL,
+        filename: String,
+        captureDate: Date?,
+        dateSource: DateSource?,
+        sequenceNumber: Int?,
+        disposition: CullDisposition? = nil
+    ) {
+        self.url = url
+        self.filename = filename
+        self.captureDate = captureDate
+        self.dateSource = dateSource
+        self.sequenceNumber = sequenceNumber
+        self.disposition = disposition
+    }
 
     var id: URL { url }
 }
@@ -117,9 +137,8 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
     }
 }
 
-/// The arrow-key policy for a single burst. It wraps at either end so a
-/// photographer can keep comparing frames without moving keyboard focus into
-/// the burst list.
+/// The arrow-key policy for a single burst. Navigation stops at either end so
+/// the selected frame position communicates when the burst is exhausted.
 enum CullFrameNavigation {
     static func frameURL(
         in frames: [CullPhoto],
@@ -130,7 +149,7 @@ enum CullFrameNavigation {
         guard offset != 0 else { return selectedURL ?? frames.first?.url }
 
         let currentIndex = frames.firstIndex { $0.url == selectedURL } ?? 0
-        let nextIndex = (currentIndex + offset % frames.count + frames.count) % frames.count
+        let nextIndex = min(max(currentIndex + offset, 0), frames.count - 1)
         return frames[nextIndex].url
     }
 }
@@ -169,24 +188,16 @@ enum BurstGroupingEngine {
         progress: @escaping @Sendable (CullScanProgress) -> Void
     ) async throws -> CullFolderScan {
         let started = Date()
-        let urls = try FileManager.default.contentsOfDirectory(
-            at: folder,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        )
-        .filter { url in
-            url.pathExtension.caseInsensitiveCompare("cr3") == .orderedSame
-        }
-        .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        let scanFiles = try reviewFiles(in: folder)
 
-        let workers = min(max(1, workerCount), max(1, urls.count))
-        let photos = await readPhotos(urls, workerCount: workers, progress: progress)
+        let workers = min(max(1, workerCount), max(1, scanFiles.count))
+        let photos = await readPhotos(scanFiles, workerCount: workers, progress: progress)
         let ordered = photos.sorted(by: isOrderedBefore)
         let grouped = group(ordered, configuration: configuration)
 
         return CullFolderScan(
             folder: folder,
-            cr3Count: urls.count,
+            cr3Count: scanFiles.count,
             unreadableMetadataCount: photos.filter { $0.captureDate == nil }.count,
             bursts: grouped.bursts,
             singleFrames: grouped.singles,
@@ -194,38 +205,82 @@ enum BurstGroupingEngine {
         )
     }
 
+    /// A cull scan treats the chosen date folder as the source of truth. It
+    /// also reads Fotocopy's two immediate decision folders so that moving a
+    /// frame to Selects or Rejects does not split the burst after relaunch.
+    /// Other subfolders deliberately remain outside the cull scan.
+    private static func reviewFiles(in folder: URL) throws -> [IndexedURL] {
+        let rootFiles = try cr3Files(in: folder).map {
+            IndexedURL(url: $0, disposition: nil)
+        }
+        let decisionFiles = try CullDisposition.allCases.flatMap { disposition in
+            let decisionFolder = folder.appendingPathComponent(
+                disposition.destinationFolderName,
+                isDirectory: true
+            )
+            return try cr3Files(in: decisionFolder).map {
+                IndexedURL(url: $0, disposition: disposition)
+            }
+        }
+
+        return (rootFiles + decisionFiles).sorted {
+            let filenameOrder = $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent)
+            if filenameOrder != .orderedSame {
+                return filenameOrder == .orderedAscending
+            }
+            return $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending
+        }
+    }
+
+    private static func cr3Files(in directory: URL) throws -> [URL] {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return []
+        }
+
+        return try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        .filter { url in
+            url.pathExtension.caseInsensitiveCompare("cr3") == .orderedSame
+        }
+    }
+
     private static func readPhotos(
-        _ urls: [URL],
+        _ files: [IndexedURL],
         workerCount: Int,
         progress: @escaping @Sendable (CullScanProgress) -> Void
     ) async -> [CullPhoto] {
-        guard !urls.isEmpty else { return [] }
+        guard !files.isEmpty else { return [] }
 
         return await withTaskGroup(of: IndexedPhoto.self) { group in
             var nextIndex = 0
-            let initialCount = min(workerCount, urls.count)
+            let initialCount = min(workerCount, files.count)
             for index in 0..<initialCount {
-                group.addTask { await photo(at: urls[index], index: index) }
+                group.addTask { await photo(at: files[index], index: index) }
                 nextIndex = index + 1
             }
 
-            var results = [IndexedPhoto?](repeating: nil, count: urls.count)
+            var results = [IndexedPhoto?](repeating: nil, count: files.count)
             var completed = 0
-            let progressStride = max(1, urls.count / 100)
+            let progressStride = max(1, files.count / 100)
 
             while let output = await group.next() {
                 results[output.index] = output
                 completed += 1
-                if completed == urls.count || completed.isMultiple(of: progressStride) {
+                if completed == files.count || completed.isMultiple(of: progressStride) {
                     progress(CullScanProgress(
                         completed: completed,
-                        total: urls.count,
+                        total: files.count,
                         filename: output.photo.filename
                     ))
                 }
-                if nextIndex < urls.count {
+                if nextIndex < files.count {
                     let index = nextIndex
-                    group.addTask { await photo(at: urls[index], index: index) }
+                    group.addTask { await photo(at: files[index], index: index) }
                     nextIndex += 1
                 }
             }
@@ -234,16 +289,17 @@ enum BurstGroupingEngine {
         }
     }
 
-    private static func photo(at url: URL, index: Int) async -> IndexedPhoto {
-        let metadata = await EXIFDateReader.readMetadata(from: url)
+    private static func photo(at file: IndexedURL, index: Int) async -> IndexedPhoto {
+        let metadata = await EXIFDateReader.readMetadata(from: file.url)
         return IndexedPhoto(
             index: index,
             photo: CullPhoto(
-                url: url,
-                filename: url.lastPathComponent,
+                url: file.url,
+                filename: file.url.lastPathComponent,
                 captureDate: metadata.dateResult?.date,
                 dateSource: metadata.dateResult?.source,
-                sequenceNumber: sequenceNumber(in: url)
+                sequenceNumber: sequenceNumber(in: file.url),
+                disposition: file.disposition
             )
         )
     }
@@ -342,4 +398,9 @@ enum BurstGroupingEngine {
 private struct IndexedPhoto: Sendable {
     let index: Int
     let photo: CullPhoto
+}
+
+private struct IndexedURL: Sendable {
+    let url: URL
+    let disposition: CullDisposition?
 }
