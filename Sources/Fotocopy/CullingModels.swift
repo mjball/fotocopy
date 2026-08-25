@@ -186,9 +186,9 @@ enum CullReviewLayout: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .browse: return "Browse"
-        case .review: return "Review"
-        case .focus: return "Focus"
+        case .browse: return "Full"
+        case .review: return "Compact"
+        case .focus: return "Minimal"
         }
     }
 }
