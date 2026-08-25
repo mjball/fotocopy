@@ -33,6 +33,7 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
 /// burst is selected below it.
 enum FotocopySidebarDestination: Hashable {
     case burst(URL)
+    case libraryDecisions
 }
 
 /// Keeps Fotocopy file-first: Import and Cull are two views over ordinary
@@ -68,7 +69,9 @@ struct FotocopyShellView: View {
             synchronizeSidebarSelectionWithWorkspace()
         }
         .onChange(of: cullModel.selectedBurstID) { _, burstID in
-            guard workspace == .cullBursts, let burstID else { return }
+            guard workspace == .cullBursts,
+                  cullModel.destination == .bursts,
+                  let burstID else { return }
             sidebarSelection = .burst(burstID)
         }
         .onChange(of: cullReviewLayout) { _, layout in
@@ -115,16 +118,26 @@ struct FotocopyShellView: View {
         switch selection {
         case .burst(let burstID):
             workspace = .cullBursts
+            cullModel.destination = .bursts
             cullModel.selectedBurstID = burstID
             cullModel.syncSelectedFrame()
+        case .libraryDecisions:
+            workspace = .cullBursts
+            cullModel.showLibraryDecisions()
         }
     }
 
     private func synchronizeSidebarSelectionWithWorkspace() {
         let storedWorkspace = workspace
-        if storedWorkspace == .cullBursts, let burstID = cullModel.selectedBurstID {
-            sidebarSelection = .burst(burstID)
-            return
+        if storedWorkspace == .cullBursts {
+            if cullModel.destination == .libraryDecisions {
+                sidebarSelection = .libraryDecisions
+                return
+            }
+            if let burstID = cullModel.selectedBurstID {
+                sidebarSelection = .burst(burstID)
+                return
+            }
         }
         sidebarSelection = nil
     }

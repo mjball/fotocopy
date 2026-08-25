@@ -12,7 +12,7 @@ struct CullWorkspaceView: View {
             model.resumeLastScanIfNeeded()
         }
         .toolbar {
-            if model.folderURL != nil {
+            if model.folderURL != nil, model.destination == .bursts {
                 ToolbarItem(placement: .primaryAction) {
                     Picker("Cull layout", selection: $layout) {
                         ForEach(CullReviewLayout.allCases) { layout in
@@ -37,7 +37,7 @@ struct CullWorkspaceView: View {
                     .buttonStyle(.bordered)
                     .help("Cancel the current burst scan")
                 }
-            } else if model.folderURL != nil {
+            } else if model.folderURL != nil, model.destination == .bursts {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         model.scan()
@@ -66,7 +66,9 @@ struct CullWorkspaceView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if model.isScanning {
+        if model.destination == .libraryDecisions {
+            CullLibraryDecisionsView(model: model)
+        } else if model.isScanning {
             ContentUnavailableView(
                 "Finding bursts",
                 systemImage: "rectangle.stack.badge.play",
@@ -101,6 +103,9 @@ struct CullSidebarSections: View {
 
     var body: some View {
         Section("Cull") {
+            Label("Library Decisions", systemImage: "checkmark.circle.badge.questionmark")
+                .tag(FotocopySidebarDestination.libraryDecisions)
+
             if let folder = model.folderURL {
                 Label(folder.path, systemImage: "folder")
                     .lineLimit(2)
@@ -759,7 +764,7 @@ private struct CullPreviewHeightResizeHandle: View {
     }
 }
 
-private enum CullPreviewSize {
+enum CullPreviewSize {
     case thumbnail
     case large
 
@@ -771,7 +776,7 @@ private enum CullPreviewSize {
     }
 }
 
-private struct CullPreviewView: View {
+struct CullPreviewView: View {
     let url: URL
     let size: CullPreviewSize
     @State private var image: NSImage?
@@ -1298,6 +1303,7 @@ private struct CullUndoOperation: Sendable {
 @Observable
 @MainActor
 final class CullViewModel {
+    var destination: CullDestination = .bursts
     var folderURL: URL?
     var scanResult: CullFolderScan?
     var isScanning = false
@@ -1315,12 +1321,20 @@ final class CullViewModel {
     var selectedFrameURL: URL?
     var inspectionSource: CullInspectionSource?
     var isPickingInspectionPoint = false
+    var libraryDecisionScan: CullLibraryDecisionScan?
+    var isScanningLibraryDecisions = false
+    var libraryScanStatus = ""
+    var libraryDecisionError: String?
+    var pendingLibraryTrashPlan: CullLibraryTrashPlan?
+    var isTrashingLibraryRejects = false
+    var libraryTrashResult: CullLibraryTrashResult?
     private(set) var dispositions: [URL: CullDisposition] = [:]
     private(set) var cameraAFTargets: [URL: CameraAFTarget] = [:]
     private(set) var loadedCameraAFTargetURLs: Set<URL> = []
     private(set) var loadingCameraAFTargetURLs: Set<URL> = []
 
     private var scanTask: Task<Void, Never>?
+    private var libraryScanTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
 
     init() {
@@ -1341,6 +1355,12 @@ final class CullViewModel {
     }
 
     var canUndoLastMove: Bool { lastUndoOperation != nil && !isMoving }
+
+    var configuredLibraryURL: URL? {
+        guard let path = UserDefaults.standard.string(forKey: PreferenceKeys.destinationPath),
+              !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path).standardizedFileURL
+    }
 
     /// A manual choice takes precedence. Camera AF mode resolves the target
     /// separately for every frame, so the crop can follow a moving subject.
@@ -1368,7 +1388,121 @@ final class CullViewModel {
     }
 
     func requestUse(folder: URL) {
+        destination = .bursts
         use(folder: folder)
+    }
+
+    func showLibraryDecisions() {
+        destination = .libraryDecisions
+        refreshLibraryDecisionsIfNeeded()
+    }
+
+    func refreshLibraryDecisionsIfNeeded() {
+        guard let libraryRoot = configuredLibraryURL else {
+            libraryDecisionScan = nil
+            libraryDecisionError = "Choose an Import destination before reviewing library decisions."
+            return
+        }
+        guard libraryDecisionScan?.libraryRootURL != libraryRoot else { return }
+        refreshLibraryDecisions()
+    }
+
+    func refreshLibraryDecisions() {
+        guard let libraryRoot = configuredLibraryURL,
+              !isScanningLibraryDecisions,
+              !isTrashingLibraryRejects else { return }
+        libraryScanTask?.cancel()
+        libraryDecisionError = nil
+        libraryTrashResult = nil
+        isScanningLibraryDecisions = true
+        libraryScanStatus = "Finding Selects and Rejects…"
+        let model = self
+        libraryScanTask = Task {
+            do {
+                let scan = try await Task.detached(priority: .userInitiated) {
+                    try LibraryDecisionEngine.scan(libraryRootURL: libraryRoot)
+                }.value
+                guard !Task.isCancelled else { return }
+                model.libraryDecisionScan = scan
+                model.libraryScanStatus = "Found \(scan.decisions.count) decision\(scan.decisions.count == 1 ? "" : "s")"
+            } catch is CancellationError {
+                // Replaced by a newer library scan.
+            } catch {
+                model.libraryDecisionError = error.localizedDescription
+            }
+            model.isScanningLibraryDecisions = false
+            model.libraryScanTask = nil
+        }
+    }
+
+    func prepareLibraryTrash() {
+        guard let libraryRoot = configuredLibraryURL,
+              !isTrashingLibraryRejects,
+              !isScanningLibraryDecisions else { return }
+        libraryDecisionError = nil
+        isScanningLibraryDecisions = true
+        libraryScanStatus = "Rechecking Rejects before Trash…"
+        let model = self
+        libraryScanTask = Task {
+            do {
+                let scan = try await Task.detached(priority: .userInitiated) {
+                    try LibraryDecisionEngine.scan(libraryRootURL: libraryRoot)
+                }.value
+                let plan = try LibraryDecisionEngine.makeTrashPlan(from: scan)
+                guard !Task.isCancelled else { return }
+                model.libraryDecisionScan = scan
+                model.pendingLibraryTrashPlan = plan
+                model.libraryScanStatus = "Rejects rechecked"
+            } catch is CancellationError {
+                // Replaced by a newer library scan.
+            } catch {
+                model.libraryDecisionError = error.localizedDescription
+            }
+            model.isScanningLibraryDecisions = false
+            model.libraryScanTask = nil
+        }
+    }
+
+    func trashLibraryRejects(using plan: CullLibraryTrashPlan) {
+        guard !isTrashingLibraryRejects else { return }
+        pendingLibraryTrashPlan = nil
+        libraryDecisionError = nil
+        isTrashingLibraryRejects = true
+        libraryScanStatus = "Moving Rejects to Finder's Trash…"
+        let model = self
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                LibraryDecisionEngine.executeTrash(plan)
+            }.value
+            guard !Task.isCancelled else { return }
+            model.libraryTrashResult = result
+            model.isTrashingLibraryRejects = false
+            model.libraryScanStatus = "Trash finished"
+            do {
+                let refreshed = try await Task.detached(priority: .userInitiated) {
+                    try LibraryDecisionEngine.scan(libraryRootURL: plan.libraryRootURL)
+                }.value
+                model.libraryDecisionScan = refreshed
+            } catch {
+                model.libraryDecisionError = "Files may have moved, but Library Decisions could not refresh: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func revealLibraryDecision(_ decision: CullLibraryDecision) {
+        NSWorkspace.shared.activateFileViewerSelecting([decision.rawURL])
+    }
+
+    func revealLibraryTrashFailures() {
+        guard let result = libraryTrashResult else { return }
+        let folders = Array(Set(result.failures.map { $0.rawURL.deletingLastPathComponent() }))
+        guard !folders.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(folders)
+    }
+
+    func openDecisionDate(_ decision: CullLibraryDecision) {
+        destination = .bursts
+        use(folder: decision.dateFolderURL)
     }
 
     private func use(folder: URL) {

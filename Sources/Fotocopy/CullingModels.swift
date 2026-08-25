@@ -186,6 +186,13 @@ enum CullReviewLayout: String, CaseIterable, Identifiable {
     }
 }
 
+/// Cull has a focused per-day burst review and a library-wide, filesystem
+/// backed decision review. Neither owns a separate photo catalog.
+enum CullDestination: Hashable {
+    case bursts
+    case libraryDecisions
+}
+
 /// Burst navigation mirrors frame navigation: the endpoints deliberately do
 /// not wrap, so an up/down press never jumps to a distant shoot.
 enum CullBurstNavigation {

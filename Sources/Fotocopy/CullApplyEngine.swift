@@ -292,7 +292,10 @@ enum CullApplyEngine {
         )
     }
 
-    private static func companionURLs(for rawURL: URL, fileManager: FileManager) -> [URL] {
+    /// The one place where Fotocopy defines sidecars belonging to a raw photo.
+    /// Both in-folder decisions and library-wide review use this so a Keep,
+    /// Reject, or Trash action always carries the same package of files.
+    static func companionURLs(for rawURL: URL, fileManager: FileManager = .default) -> [URL] {
         let baseURL = rawURL.deletingPathExtension()
         let candidates = [
             rawURL.appendingPathExtension("xmp"),

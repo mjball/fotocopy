@@ -365,6 +365,26 @@ struct DestinationManifest {
         }
     }
 
+    /// Records known destination files that Fotocopy has sent to Finder's
+    /// Trash. Their duplicate history intentionally remains in the manifest,
+    /// so restoring or re-importing a repeated camera filename stays
+    /// conservative.
+    func recordDeletedPaths(_ relativePaths: [String]) throws {
+        guard !relativePaths.isEmpty else { return }
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw NSError(
+                domain: "DestinationManifest",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Fotocopy's destination manifest is unavailable"]
+            )
+        }
+
+        let db = try openDatabase(at: databaseURL)
+        defer { sqlite3_close(db) }
+        try ensureSchema(in: db)
+        try updatePresence(in: db, deletedPaths: relativePaths, restoredPaths: [])
+    }
+
     private func loadIndexResult() throws -> ManifestLoadResult {
         let snapshots = try enumerateDestinationFiles()
         if !FileManager.default.fileExists(atPath: databaseURL.path) {
