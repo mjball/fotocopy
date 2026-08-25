@@ -33,6 +33,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 ### Native macOS workflow
 
 - Keeps files visible and usable in Finder and other photo software at every stage.
+- Shows a quiet, live toolbar temperature readout for connected external SSDs, using macOS-provided SMART data without a password prompt.
 - Includes a standard menu bar with discoverable commands and shortcuts, persistent cull preferences, and built-in update checks.
 
 ## Install

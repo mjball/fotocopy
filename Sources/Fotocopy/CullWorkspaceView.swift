@@ -11,47 +11,6 @@ struct CullWorkspaceView: View {
         .task {
             model.resumeLastScanIfNeeded()
         }
-        .toolbar {
-            if model.folderURL != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Picker("Cull layout", selection: $layout) {
-                        ForEach(CullReviewLayout.allCases) { layout in
-                            Text(layout.title).tag(layout)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 220)
-                    .help("Choose how much surrounding UI is shown while reviewing bursts")
-                }
-            }
-            if model.isScanning {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.cancel()
-                    } label: {
-                        Label("Cancel Scan", systemImage: "xmark")
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .help("Cancel the current burst scan")
-                }
-            } else if model.folderURL != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.scan()
-                    } label: {
-                        Label("Rescan", systemImage: "arrow.clockwise")
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .disabled(model.isMoving)
-                    .help("Scan this folder again for bursts")
-                }
-            }
-        }
         .alert("Could not scan folder", isPresented: $model.showError) {
             Button("OK", role: .cancel) { }
         } message: {

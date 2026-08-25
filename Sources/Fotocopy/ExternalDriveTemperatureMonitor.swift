@@ -33,14 +33,6 @@ final class ExternalDriveTemperatureMonitor {
         readings.first(where: { $0.temperatureCelsius != nil }) ?? readings.first
     }
 
-    var toolbarLabel: String {
-        guard let primaryReading else { return "" }
-        if readings.count == 1 {
-            return "\(primaryReading.volumeName) · \(primaryReading.temperatureLabel)"
-        }
-        return "\(readings.count) external SSDs · \(primaryReading.temperatureLabel)"
-    }
-
     func start() {
         guard refreshLoop == nil else { return }
         installVolumeObservers()
@@ -197,28 +189,53 @@ enum ExternalDriveTemperatureReader {
     }
 }
 
-struct ExternalDriveTemperatureToolbarChip: View {
+/// A read-only toolbar status. A typical Fotocopy session has one external
+/// photo SSD, so its name and live temperature remain visible without a click.
+/// The compact disclosure appears only for the uncommon multi-drive case.
+struct ExternalDriveTemperatureToolbarStatus: View {
     @Bindable var monitor: ExternalDriveTemperatureMonitor
 
     var body: some View {
-        if monitor.primaryReading != nil {
-            Menu {
-                ForEach(monitor.readings) { reading in
-                    Text("\(reading.volumeName) · \(reading.temperatureLabel)")
+        if let reading = monitor.primaryReading {
+            HStack(spacing: 6) {
+                Image(systemName: "externaldrive.fill")
+                    .imageScale(.small)
+                Text(reading.volumeName)
+                    .lineLimit(1)
+                Circle()
+                    .fill(chipColor)
+                    .frame(width: 6, height: 6)
+                Text(shortTemperatureLabel(for: reading))
+                    .monospacedDigit()
+                if monitor.readings.count > 1 {
+                    Menu {
+                        ForEach(monitor.readings) { reading in
+                            Text("\(reading.volumeName) · \(reading.temperatureLabel)")
+                        }
+                        Divider()
+                        Button("Refresh Drive Temperature") {
+                            monitor.refresh()
+                        }
+                        .disabled(monitor.isRefreshing)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("Show all connected external SSD temperatures")
                 }
-                Divider()
-                Button("Refresh Drive Temperature") {
-                    monitor.refresh()
-                }
-                .disabled(monitor.isRefreshing)
-            } label: {
-                Label(monitor.toolbarLabel, systemImage: "thermometer.medium")
-                    .foregroundStyle(chipColor)
             }
-            .menuStyle(.borderedButton)
-            .controlSize(.small)
+            .font(.callout)
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             .help(helpText)
         }
+    }
+
+    private func shortTemperatureLabel(for reading: ExternalDriveTemperatureReading) -> String {
+        guard let temperature = reading.temperatureCelsius else { return "—" }
+        return "\(temperature)°C"
     }
 
     private var chipColor: Color {
@@ -226,7 +243,7 @@ struct ExternalDriveTemperatureToolbarChip: View {
         switch temperature {
         case 61...: return .red
         case 51...: return .orange
-        default: return .primary
+        default: return .green
         }
     }
 

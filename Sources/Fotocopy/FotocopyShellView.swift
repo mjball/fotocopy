@@ -62,8 +62,59 @@ struct FotocopyShellView: View {
         }
         .navigationTitle(workspace.windowTitle)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                ExternalDriveTemperatureToolbarChip(monitor: driveTemperatureMonitor)
+            if workspace == .cullBursts {
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 12) {
+                        if cullModel.folderURL != nil {
+                            Text("View")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("Cull layout", selection: $cullReviewLayout) {
+                                ForEach(CullReviewLayout.allCases) { layout in
+                                    Text(layout.title).tag(layout)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .frame(width: 208)
+                            .help("Choose how much surrounding UI is shown while reviewing bursts")
+                        }
+
+                        if cullModel.folderURL != nil, driveTemperatureMonitor.primaryReading != nil {
+                            Divider()
+                                .frame(height: 22)
+                        }
+
+                        ExternalDriveTemperatureToolbarStatus(monitor: driveTemperatureMonitor)
+
+                        if cullModel.isScanning {
+                            Button {
+                                cullModel.cancel()
+                            } label: {
+                                Label("Cancel", systemImage: "xmark")
+                            }
+                            .labelStyle(.titleAndIcon)
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                            .help("Cancel the current burst scan")
+                        } else if cullModel.folderURL != nil {
+                            Button {
+                                cullModel.scan()
+                            } label: {
+                                Label("Rescan", systemImage: "arrow.clockwise")
+                            }
+                            .labelStyle(.titleAndIcon)
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                            .disabled(cullModel.isMoving)
+                            .help("Scan this folder again for bursts")
+                        }
+                    }
+                }
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    ExternalDriveTemperatureToolbarStatus(monitor: driveTemperatureMonitor)
+                }
             }
         }
         .onAppear {
