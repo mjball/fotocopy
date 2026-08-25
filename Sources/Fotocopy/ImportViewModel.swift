@@ -351,6 +351,11 @@ final class ImportViewModel {
                     duplicateChecker: checker,
                     progress: progress
                 )
+                if !progress.importedFolderPaths.isEmpty {
+                    let folders = progress.importedFolderPaths.sorted()
+                    UserDefaults.standard.set(folders, forKey: PreferenceKeys.recentCullFolders)
+                    UserDefaults.standard.set(folders.last, forKey: PreferenceKeys.lastCullFolder)
+                }
             } catch {
                 if !Task.isCancelled {
                     progress.errors.append((file: "Import", message: error.localizedDescription))

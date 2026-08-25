@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum TransferMode: String, CaseIterable {
     case copy
@@ -6,6 +7,7 @@ enum TransferMode: String, CaseIterable {
 }
 
 enum PreferenceKeys {
+    static let activeWorkspace = "activeWorkspace"
     static let sourcePath = "sourcePath"
     static let destinationPath = "destinationPath"
     static let transferMode = "transferMode"
@@ -15,6 +17,43 @@ enum PreferenceKeys {
     static let ejectDestination = "ejectDestination"
     static let excludedExtensions = "excludedExtensions"
     static let excludedCameraModels = "excludedCameraModels"
+    static let recentCullFolders = "recentCullFolders"
+    static let lastCullFolder = "lastCullFolder"
+    static let cullScanWorkerCount = "cullScanWorkerCount"
+    static let cullPreviewHeight = "cullPreviewHeight"
+    static let cullShowsAFTarget = "cullShowsAFTarget"
+}
+
+enum CullSettings {
+    static let availableScanWorkerCounts = [1, 2, 4, 6]
+
+    static var scanWorkerCount: Int {
+        let savedCount = UserDefaults.standard.integer(forKey: PreferenceKeys.cullScanWorkerCount)
+        return availableScanWorkerCounts.contains(savedCount) ? savedCount : 4
+    }
+}
+
+struct FotocopySettingsView: View {
+    @AppStorage(PreferenceKeys.cullScanWorkerCount) private var scanWorkerCount = 4
+
+    var body: some View {
+        Form {
+            Section("Cull") {
+                Picker("Scan workers", selection: $scanWorkerCount) {
+                    ForEach(CullSettings.availableScanWorkerCounts, id: \.self) { count in
+                        Text("\(count)").tag(count)
+                    }
+                }
+
+                Text("Controls how many photo files Fotocopy reads at once while finding bursts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 360)
+        .padding()
+    }
 }
 
 struct ImportFilter: Sendable {

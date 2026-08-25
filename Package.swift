@@ -14,9 +14,17 @@ let package = Package(
                 .process("../../Resources")
             ]
         ),
+        .executableTarget(
+            name: "BurstCullTester",
+            path: "Sources/BurstCullTester"
+        ),
         .testTarget(
             name: "FotocopyTests",
             dependencies: ["Fotocopy"]
+        ),
+        .testTarget(
+            name: "BurstCullTesterTests",
+            dependencies: ["BurstCullTester"]
         )
     ]
 )

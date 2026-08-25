@@ -3,14 +3,20 @@ import AppKit
 
 @main
 struct FotocopyApp: App {
+    @NSApplicationDelegateAdaptor(FotocopyApplicationDelegate.self) private var appDelegate
     @State private var isChecking = false
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            FotocopyShellView()
         }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 520, height: 400)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 980, height: 700)
+
+        Settings {
+            FotocopySettingsView()
+        }
+
         .commands {
             CommandGroup(after: .appInfo) {
                 Button(isChecking ? "Checking..." : "Check for Updates...") {
@@ -18,6 +24,33 @@ struct FotocopyApp: App {
                 }
                 .disabled(isChecking)
                 .keyboardShortcut("u", modifiers: .command)
+            }
+
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Button("Photo Import") {
+                    UserDefaults.standard.set(
+                        FotocopyWorkspace.importPhotos.rawValue,
+                        forKey: PreferenceKeys.activeWorkspace
+                    )
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Burst Cull") {
+                    UserDefaults.standard.set(
+                        FotocopyWorkspace.cullBursts.rawValue,
+                        forKey: PreferenceKeys.activeWorkspace
+                    )
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Organize Library") {
+                    UserDefaults.standard.set(
+                        FotocopyWorkspace.organize.rawValue,
+                        forKey: PreferenceKeys.activeWorkspace
+                    )
+                }
+                .keyboardShortcut("3", modifiers: .command)
             }
         }
     }

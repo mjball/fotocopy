@@ -23,6 +23,7 @@ final class ImportProgress {
     var totalTransferBytes = 0
     var transferredBytes = 0
     var settledTransferBytes = 0
+    var importedFolderPaths: Set<String> = []
 
     private let now: () -> ContinuousClock.Instant
     private var importStartedAt: ContinuousClock.Instant?
@@ -95,6 +96,7 @@ final class ImportProgress {
         self.lastSuccessfulSample = nil
         self.successfulSampleCount = 0
         self.smoothedThroughputEstimate = nil
+        self.importedFolderPaths = []
     }
 
     func recordDuplicateSkipped() {
@@ -102,11 +104,14 @@ final class ImportProgress {
         processedFiles += 1
     }
 
-    func recordSuccessfulTransfer(bytes: Int) {
+    func recordSuccessfulTransfer(bytes: Int, destinationFolderPath: String? = nil) {
         let transferBytes = max(0, bytes)
         processedFiles += 1
         transferredBytes += transferBytes
         settledTransferBytes += transferBytes
+        if let destinationFolderPath {
+            importedFolderPaths.insert(destinationFolderPath)
+        }
 
         guard transferBytes > 0 else { return }
 
@@ -160,6 +165,7 @@ final class ImportProgress {
         totalTransferBytes = 0
         transferredBytes = 0
         settledTransferBytes = 0
+        importedFolderPaths = []
         importStartedAt = nil
         lastSuccessfulSample = nil
         successfulSampleCount = 0
