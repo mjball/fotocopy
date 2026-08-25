@@ -41,6 +41,8 @@ struct FotocopyShellView: View {
     @AppStorage(PreferenceKeys.activeWorkspace) private var workspaceRaw = FotocopyWorkspace.importPhotos.rawValue
     @State private var cullModel = CullViewModel()
     @State private var sidebarSelection: FotocopySidebarDestination?
+    @State private var cullReviewLayout: CullReviewLayout = .browse
+    @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
 
     private var workspace: FotocopyWorkspace {
         get { FotocopyWorkspace(rawValue: workspaceRaw) ?? .importPhotos }
@@ -48,7 +50,7 @@ struct FotocopyShellView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $sidebarVisibility) {
             workspaceSidebar
         } detail: {
             workspaceDetail
@@ -68,6 +70,9 @@ struct FotocopyShellView: View {
         .onChange(of: cullModel.selectedBurstID) { _, burstID in
             guard workspace == .cullBursts, let burstID else { return }
             sidebarSelection = .burst(burstID)
+        }
+        .onChange(of: cullReviewLayout) { _, layout in
+            sidebarVisibility = layout == .browse ? .all : .detailOnly
         }
     }
 
@@ -100,7 +105,7 @@ struct FotocopyShellView: View {
         case .importPhotos:
             ContentView()
         case .cullBursts:
-            CullWorkspaceView(model: cullModel)
+            CullWorkspaceView(model: cullModel, layout: $cullReviewLayout)
         }
     }
 

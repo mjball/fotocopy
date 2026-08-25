@@ -21,6 +21,7 @@ enum PreferenceKeys {
     static let lastCullFolder = "lastCullFolder"
     static let cullScanWorkerCount = "cullScanWorkerCount"
     static let cullPreviewHeight = "cullPreviewHeight"
+    static let cullShowsAFTarget = "cullShowsAFTarget"
 }
 
 enum CullSettings {

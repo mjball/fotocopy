@@ -4,6 +4,7 @@ import SwiftUI
 
 struct CullWorkspaceView: View {
     @Bindable var model: CullViewModel
+    @Binding var layout: CullReviewLayout
 
     var body: some View {
         detail
@@ -11,6 +12,19 @@ struct CullWorkspaceView: View {
             model.resumeLastScanIfNeeded()
         }
         .toolbar {
+            if model.folderURL != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Picker("Cull layout", selection: $layout) {
+                        ForEach(CullReviewLayout.allCases) { layout in
+                            Text(layout.title).tag(layout)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                    .help("Choose how much surrounding UI is shown while reviewing bursts")
+                }
+            }
             if model.isScanning {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -58,7 +72,7 @@ struct CullWorkspaceView: View {
                 systemImage: "rectangle.stack.badge.play",
                 description: Text("Fotocopy reads this date folder plus Selects and Rejects, then rebuilds your burst review from the files on disk."))
         } else if let burst = model.selectedBurst {
-            BurstReviewView(burst: burst, model: model)
+            BurstReviewView(burst: burst, model: model, layout: layout)
         } else if let scan = model.scanResult, scan.cr3Count == 0 {
             ContentUnavailableView(
                 "No CR3 files in this folder",
@@ -219,8 +233,11 @@ struct CullSidebarSections: View {
 private struct BurstReviewView: View {
     let burst: PhotoBurst
     @Bindable var model: CullViewModel
+    let layout: CullReviewLayout
     @AppStorage(PreferenceKeys.cullPreviewHeight) private var previewHeight = 540.0
+    @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
     @State private var previewHeightAtDragStart: Double?
+    @State private var viewport = CullPreviewViewport()
 
     private let defaultPreviewHeight = 540.0
     private let minimumPreviewHeight = 360.0
@@ -237,119 +254,48 @@ private struct BurstReviewView: View {
     }
 
     var body: some View {
-        ScrollView {
-            reviewContent
+        Group {
+            switch layout {
+            case .browse:
+                ScrollView {
+                    browseContent
+                }
+            case .review:
+                compactReviewContent
+            case .focus:
+                focusReviewContent
+            }
         }
         .background {
-            CullFrameNavigationKeyHandler { offset in
-                model.moveSelectedFrame(in: burst, by: offset)
-            }
+            CullNavigationKeyHandler(
+                moveFrame: { offset in
+                    model.moveSelectedFrame(in: burst, by: offset)
+                },
+                moveBurst: { offset in
+                    model.moveSelectedBurst(by: offset)
+                }
+            )
             .frame(width: 0, height: 0)
+        }
+        .onChange(of: burst.id) {
+            viewport = CullPreviewViewport()
+        }
+        .task(id: burst.id) {
+            model.loadCameraAFTargets(in: burst)
+            await Task.detached(priority: .utility) {
+                CullPreviewCache.shared.prefetch(burst.frames.map(\.url))
+            }.value
         }
     }
 
-    private var reviewContent: some View {
+    private var browseContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(burst.title)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(1)
-                    Text("\(burst.frames.count) related frames · frame \(selectedFramePosition) of \(burst.frames.count)")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Reveal Selected") { model.revealSelectedFrame() }
-                    .disabled(selectedFrame == nil)
-            }
+            standardHeader
 
             if let selectedFrame {
                 HStack(alignment: .top, spacing: 18) {
-                    CullInspectionPreviewView(
-                        url: selectedFrame.url,
-                        inspectionPoint: model.inspectionPoint,
-                        cameraAFTarget: model.cameraAFTarget(for: selectedFrame.url),
-                        isPickingInspectionPoint: model.isPickingInspectionPoint,
-                        onInspectionPointSelected: model.setInspectionPoint
-                    )
-                    .id(selectedFrame.url)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: resolvedPreviewHeight,
-                        maxHeight: resolvedPreviewHeight
-                    )
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(selectedFrame.filename)
-                            .font(.headline)
-                        Text(captureLabel(selectedFrame))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Divider()
-
-                        Button(model.isKeeping(selectedFrame.url) ? "Kept — undo" : "Keep") {
-                            model.toggleKeeping(selectedFrame.url)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.isMoving)
-
-                        Button(model.isRejecting(selectedFrame.url) ? "Rejected — undo" : "Reject") {
-                            model.toggleRejecting(selectedFrame.url)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(model.isMoving)
-
-                        Divider()
-
-                        if model.isLoadingCameraAFTarget(for: selectedFrame.url) {
-                            HStack(spacing: 6) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text("Reading camera AF data…")
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        } else if let target = model.cameraAFTarget(for: selectedFrame.url) {
-                            Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            if !model.isUsingCameraAFTarget {
-                                Button("Use camera AF target") {
-                                    model.useCameraAFTarget()
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                        } else if model.hasLoadedCameraAFTarget(for: selectedFrame.url) {
-                            Text("No active camera AF target recorded")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
-                            model.beginPickingInspectionPoint()
-                        }
-                        .buttonStyle(.bordered)
-
-                        if model.inspectionSource != nil {
-                            Button("Clear inspection target") {
-                                model.clearInspectionPoint()
-                            }
-                            .buttonStyle(.link)
-                        }
-
-                        Text(inspectionHint(for: model))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(width: 230, alignment: .leading)
+                    mainPreview(for: selectedFrame, height: resolvedPreviewHeight)
+                    frameInspector(for: selectedFrame)
                 }
             }
 
@@ -468,12 +414,278 @@ private struct BurstReviewView: View {
             }
         }
         .padding(24)
-        .task(id: burst.id) {
-            model.loadCameraAFTargets(in: burst)
-            await Task.detached(priority: .utility) {
-                CullPreviewCache.shared.prefetch(burst.frames.map(\.url))
-            }.value
+    }
+
+    private var standardHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(burst.title)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(burst.frames.count) related frames · frame \(selectedFramePosition) of \(burst.frames.count)")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Reveal Selected") { model.revealSelectedFrame() }
+                .disabled(selectedFrame == nil)
         }
+    }
+
+    @ViewBuilder
+    private func mainPreview(for frame: CullPhoto, height: CGFloat? = nil) -> some View {
+        if let height {
+            CullInspectionPreviewView(
+                url: frame.url,
+                inspectionPoint: model.inspectionPoint,
+                cameraAFTarget: showsCameraAFTarget ? model.cameraAFTarget(for: frame.url) : nil,
+                isPickingInspectionPoint: model.isPickingInspectionPoint,
+                onInspectionPointSelected: model.setInspectionPoint,
+                viewport: $viewport
+            )
+            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            CullInspectionPreviewView(
+                url: frame.url,
+                inspectionPoint: model.inspectionPoint,
+                cameraAFTarget: showsCameraAFTarget ? model.cameraAFTarget(for: frame.url) : nil,
+                isPickingInspectionPoint: model.isPickingInspectionPoint,
+                onInspectionPointSelected: model.setInspectionPoint,
+                viewport: $viewport
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.black, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private func frameInspector(for frame: CullPhoto) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(frame.filename)
+                .font(.headline)
+            Text(captureLabel(frame))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Button(model.isKeeping(frame.url) ? "Kept — undo" : "Keep") {
+                model.toggleKeeping(frame.url)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isMoving)
+
+            Button(model.isRejecting(frame.url) ? "Rejected — undo" : "Reject") {
+                model.toggleRejecting(frame.url)
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isMoving)
+
+            Divider()
+
+            if model.isLoadingCameraAFTarget(for: frame.url) {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Reading camera AF data…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if let target = model.cameraAFTarget(for: frame.url) {
+                Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Toggle("Show camera AF target", isOn: $showsCameraAFTarget)
+                    .controlSize(.small)
+                if !model.isUsingCameraAFTarget {
+                    Button("Use camera AF target") {
+                        model.useCameraAFTarget()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else if model.hasLoadedCameraAFTarget(for: frame.url) {
+                Text("No active camera AF target recorded")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
+                model.beginPickingInspectionPoint()
+            }
+            .buttonStyle(.bordered)
+
+            if model.inspectionSource != nil {
+                Button("Clear inspection target") {
+                    model.clearInspectionPoint()
+                }
+                .buttonStyle(.link)
+            }
+
+            Text(inspectionHint(for: model))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(width: 230, alignment: .leading)
+    }
+
+    private var compactReviewContent: some View {
+        VStack(spacing: 10) {
+            compactHeader
+            if let selectedFrame {
+                mainPreview(for: selectedFrame)
+                    .padding(.horizontal, 14)
+            }
+            compactFilmstrip
+        }
+        .padding(.vertical, 12)
+    }
+
+    private var focusReviewContent: some View {
+        ZStack(alignment: .bottom) {
+            if let selectedFrame {
+                mainPreview(for: selectedFrame)
+                    .clipShape(Rectangle())
+            } else {
+                Color.black
+            }
+
+            VStack(spacing: 0) {
+                focusHeader
+                Spacer()
+                compactFilmstrip
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.68))
+            }
+        }
+    }
+
+    private var compactHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(burst.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("Frame \(selectedFramePosition) of \(burst.frames.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            compactDecisionControls
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var focusHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(burst.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("Frame \(selectedFramePosition) of \(burst.frames.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            compactDecisionControls
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 24)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.76), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+
+    private var compactDecisionControls: some View {
+        HStack(spacing: 7) {
+            if let selectedFrame {
+                Button(model.isKeeping(selectedFrame.url) ? "Kept" : "Keep") {
+                    model.toggleKeeping(selectedFrame.url)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isMoving)
+
+                Button(model.isRejecting(selectedFrame.url) ? "Rejected" : "Reject") {
+                    model.toggleRejecting(selectedFrame.url)
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.isMoving)
+            }
+
+            Toggle("AF Target", isOn: $showsCameraAFTarget)
+                .toggleStyle(.button)
+
+            Menu("More") {
+                if burst.frames.count > 1, selectedFrame != nil {
+                    Button("Keep selected, reject \(burst.frames.count - 1)") {
+                        model.keepSelectedAndRejectRest(in: burst)
+                    }
+                }
+                Button("Keep all") { model.markAllKeeping(in: burst) }
+                Button("Reject all") { model.markAllRejecting(in: burst) }
+                Button("Clear marks") { model.clearDispositions(in: burst) }
+                Divider()
+                Button("Reveal Selected") { model.revealSelectedFrame() }
+                Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
+                    model.beginPickingInspectionPoint()
+                }
+                if model.inspectionSource != nil {
+                    Button("Clear inspection target") {
+                        model.clearInspectionPoint()
+                    }
+                }
+                Toggle("Show camera AF target", isOn: $showsCameraAFTarget)
+            }
+            .disabled(model.isMoving)
+        }
+        .controlSize(.small)
+    }
+
+    private var compactFilmstrip: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 9) {
+                ForEach(burst.frames) { frame in
+                    Button {
+                        model.selectFrame(frame.url)
+                    } label: {
+                        ZStack(alignment: .bottomLeading) {
+                            CullPreviewView(url: frame.url, size: .thumbnail)
+                                .frame(width: 96, height: 70)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            if model.isKeeping(frame.url) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .padding(4)
+                            } else if model.isRejecting(frame.url) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.red)
+                                    .padding(4)
+                            }
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(model.selectedFrameURL == frame.url ? Color.accentColor : Color.clear, lineWidth: 3)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(frame.filename)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 16)
+        }
+        .frame(height: 76)
     }
 
     private func resizePreview(by translation: CGFloat) {
@@ -600,16 +812,17 @@ private struct CullInspectionPreviewView: View {
     let cameraAFTarget: CameraAFTarget?
     let isPickingInspectionPoint: Bool
     let onInspectionPointSelected: (CullInspectionPoint) -> Void
+    @Binding var viewport: CullPreviewViewport
 
     @State private var image: NSImage?
     @State private var didFail = false
     @State private var fullPreview: NSImage?
     @State private var fullPreviewDidFail = false
-    @State private var committedZoom: CGFloat = 1
     @GestureState private var gestureMagnification: CGFloat = 1
+    @GestureState private var gestureTranslation: CGSize = .zero
 
     private var effectiveZoom: CGFloat {
-        min(max(committedZoom * gestureMagnification, 1), 6)
+        min(max(viewport.zoom * gestureMagnification, 1), 6)
     }
 
     private var fullPreviewRequestID: String {
@@ -635,7 +848,6 @@ private struct CullInspectionPreviewView: View {
             didFail = false
             fullPreview = nil
             fullPreviewDidFail = false
-            committedZoom = 1
             let loaded = await Task.detached(priority: .userInitiated) {
                 CullPreviewCache.shared.preview(for: url, maxPixelSize: CullPreviewSize.large.maxPixelSize)
             }.value
@@ -657,7 +869,7 @@ private struct CullInspectionPreviewView: View {
         }
         .onChange(of: isPickingInspectionPoint) { _, isPicking in
             if isPicking {
-                committedZoom = 1
+                viewport.zoom = 1
             }
         }
     }
@@ -672,86 +884,97 @@ private struct CullInspectionPreviewView: View {
             width: baseRect.width * effectiveZoom,
             height: baseRect.height * effectiveZoom
         )
-        let canvasSize = CGSize(
-            width: max(geometry.size.width, zoomedSize.width),
-            height: max(geometry.size.height, zoomedSize.height)
+        let displayedCenter = centeredImagePoint(
+            from: viewport.center,
+            translation: gestureTranslation,
+            imageSize: zoomedSize,
+            containerSize: geometry.size
         )
-        let imageRect = CullInspectionGeometry.fittedImageRect(
-            imageSize: image.size,
-            in: canvasSize
+        let imageRect = CGRect(
+            x: geometry.size.width / 2 - zoomedSize.width * CGFloat(displayedCenter.x),
+            y: geometry.size.height / 2 - zoomedSize.height * CGFloat(displayedCenter.y),
+            width: zoomedSize.width,
+            height: zoomedSize.height
         )
 
         ZStack(alignment: .topTrailing) {
-            ScrollView([.horizontal, .vertical]) {
-                ZStack {
-                    Image(nsImage: image)
-                        .resizable()
-                        .frame(width: imageRect.width, height: imageRect.height)
-                        .position(x: imageRect.midX, y: imageRect.midY)
+            ZStack {
+                Image(nsImage: image)
+                    .resizable()
+                    .frame(width: imageRect.width, height: imageRect.height)
+                    .position(x: imageRect.midX, y: imageRect.midY)
 
-                    if let inspectionPoint {
-                        Circle()
-                            .stroke(.white, lineWidth: 2)
-                            .frame(width: 30, height: 30)
-                            .background(Circle().fill(.black.opacity(0.38)))
-                            .shadow(radius: 2)
-                            .position(
-                                x: imageRect.minX + imageRect.width * CGFloat(inspectionPoint.x),
-                                y: imageRect.minY + imageRect.height * CGFloat(inspectionPoint.y)
-                            )
-                            .allowsHitTesting(false)
-                    }
-
-                    if let cameraAFTarget {
-                        let targetRect = cameraAFTarget.normalizedRect
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(.yellow, lineWidth: 2)
-                            .shadow(color: .black.opacity(0.75), radius: 1)
-                            .frame(
-                                width: max(2, imageRect.width * targetRect.width),
-                                height: max(2, imageRect.height * targetRect.height)
-                            )
-                            .position(
-                                x: imageRect.minX + imageRect.width * targetRect.midX,
-                                y: imageRect.minY + imageRect.height * targetRect.midY
-                            )
-                            .accessibilityLabel("Camera AF target")
-                            .allowsHitTesting(false)
-                    }
-
-                    if isPickingInspectionPoint {
-                        Text("Click a subject detail")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.7), in: Capsule())
-                            .foregroundStyle(.white)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            .allowsHitTesting(false)
-                    }
+                if let inspectionPoint {
+                    Circle()
+                        .stroke(.white, lineWidth: 2)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(.black.opacity(0.38)))
+                        .shadow(radius: 2)
+                        .position(
+                            x: imageRect.minX + imageRect.width * CGFloat(inspectionPoint.x),
+                            y: imageRect.minY + imageRect.height * CGFloat(inspectionPoint.y)
+                        )
+                        .allowsHitTesting(false)
                 }
-                .frame(width: canvasSize.width, height: canvasSize.height)
-                .contentShape(Rectangle())
-                .gesture(
-                    SpatialTapGesture()
-                        .onEnded { value in
-                            guard isPickingInspectionPoint,
-                                  let point = CullInspectionGeometry.normalizedPoint(
-                                    for: value.location,
-                                    imageSize: image.size,
-                                    in: canvasSize
-                                  ) else { return }
-                            onInspectionPointSelected(point)
-                        }
-                )
+
+                if let cameraAFTarget {
+                    let targetRect = cameraAFTarget.normalizedRect
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(.yellow, lineWidth: 2)
+                        .shadow(color: .black.opacity(0.75), radius: 1)
+                        .frame(
+                            width: max(2, imageRect.width * targetRect.width),
+                            height: max(2, imageRect.height * targetRect.height)
+                        )
+                        .position(
+                            x: imageRect.minX + imageRect.width * targetRect.midX,
+                            y: imageRect.minY + imageRect.height * targetRect.midY
+                        )
+                        .accessibilityLabel("Camera AF target")
+                        .allowsHitTesting(false)
+                }
+
+                if isPickingInspectionPoint {
+                    Text("Click a subject detail")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.7), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .allowsHitTesting(false)
+                }
             }
-            .background(.black)
-            .simultaneousGesture(magnificationGesture)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .clipped()
+            .gesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        guard isPickingInspectionPoint,
+                              imageRect.contains(value.location) else {
+                            return
+                        }
+                        onInspectionPointSelected(
+                            CullInspectionPoint(
+                                x: Double((value.location.x - imageRect.minX) / imageRect.width),
+                                y: Double((value.location.y - imageRect.minY) / imageRect.height)
+                            )
+                        )
+                    }
+            )
+            .simultaneousGesture(panGesture(in: geometry.size, imageSize: zoomedSize))
+            .simultaneousGesture(magnificationGesture(baseRect: baseRect, containerSize: geometry.size))
             .onTapGesture(count: 2) {
                 guard !isPickingInspectionPoint else { return }
                 withAnimation(.easeInOut(duration: 0.16)) {
-                    committedZoom = effectiveZoom > 1.02 ? 1 : 2
+                    viewport.zoom = effectiveZoom > 1.02 ? 1 : 2
+                    viewport.center = clampedCenter(
+                        viewport.center,
+                        imageSize: CGSize(width: baseRect.width * viewport.zoom, height: baseRect.height * viewport.zoom),
+                        containerSize: geometry.size
+                    )
                 }
             }
 
@@ -767,14 +990,76 @@ private struct CullInspectionPreviewView: View {
         }
     }
 
-    private var magnificationGesture: some Gesture {
+    private func panGesture(in containerSize: CGSize, imageSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .updating($gestureTranslation) { value, state, _ in
+                guard !isPickingInspectionPoint else { return }
+                state = value.translation
+            }
+            .onEnded { value in
+                guard !isPickingInspectionPoint else { return }
+                viewport.center = centeredImagePoint(
+                    from: viewport.center,
+                    translation: value.translation,
+                    imageSize: imageSize,
+                    containerSize: containerSize
+                )
+            }
+    }
+
+    private func magnificationGesture(
+        baseRect: CGRect,
+        containerSize: CGSize
+    ) -> some Gesture {
         MagnifyGesture()
             .updating($gestureMagnification) { value, state, _ in
+                guard !isPickingInspectionPoint else { return }
                 state = value.magnification
             }
             .onEnded { value in
-                committedZoom = min(max(committedZoom * value.magnification, 1), 6)
+                guard !isPickingInspectionPoint else { return }
+                viewport.zoom = min(max(viewport.zoom * value.magnification, 1), 6)
+                viewport.center = clampedCenter(
+                    viewport.center,
+                    imageSize: CGSize(width: baseRect.width * viewport.zoom, height: baseRect.height * viewport.zoom),
+                    containerSize: containerSize
+                )
             }
+    }
+
+    private func centeredImagePoint(
+        from center: CullInspectionPoint,
+        translation: CGSize,
+        imageSize: CGSize,
+        containerSize: CGSize
+    ) -> CullInspectionPoint {
+        guard imageSize.width > 0, imageSize.height > 0 else { return center }
+        return clampedCenter(
+            CullInspectionPoint(
+                x: center.x - Double(translation.width / imageSize.width),
+                y: center.y - Double(translation.height / imageSize.height)
+            ),
+            imageSize: imageSize,
+            containerSize: containerSize
+        )
+    }
+
+    private func clampedCenter(
+        _ center: CullInspectionPoint,
+        imageSize: CGSize,
+        containerSize: CGSize
+    ) -> CullInspectionPoint {
+        guard imageSize.width > 0, imageSize.height > 0 else { return center }
+        let visibleWidth = min(1, containerSize.width / imageSize.width)
+        let visibleHeight = min(1, containerSize.height / imageSize.height)
+        let minimumX = visibleWidth / 2
+        let maximumX = 1 - minimumX
+        let minimumY = visibleHeight / 2
+        let maximumY = 1 - minimumY
+        return CullInspectionPoint(
+            x: Double(min(max(CGFloat(center.x), minimumX), maximumX)),
+            y: Double(min(max(CGFloat(center.y), minimumY), maximumY))
+        )
     }
 }
 
@@ -918,13 +1203,14 @@ private struct CullInspectionCropView: View {
 }
 
 /// SwiftUI's focus can legitimately be in the burst list or a button while a
-/// photographer is reviewing. A local monitor keeps plain left/right arrows
-/// dedicated to the current burst without stealing shortcuts or text editing.
-private struct CullFrameNavigationKeyHandler: NSViewRepresentable {
-    let move: (Int) -> Void
+/// photographer is reviewing. A local monitor keeps plain arrow keys dedicated
+/// to culling without stealing shortcuts or text editing.
+private struct CullNavigationKeyHandler: NSViewRepresentable {
+    let moveFrame: (Int) -> Void
+    let moveBurst: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(move: move)
+        Coordinator(moveFrame: moveFrame, moveBurst: moveBurst)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -933,7 +1219,8 @@ private struct CullFrameNavigationKeyHandler: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.move = move
+        context.coordinator.moveFrame = moveFrame
+        context.coordinator.moveBurst = moveBurst
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -941,11 +1228,16 @@ private struct CullFrameNavigationKeyHandler: NSViewRepresentable {
     }
 
     final class Coordinator {
-        var move: (Int) -> Void
+        var moveFrame: (Int) -> Void
+        var moveBurst: (Int) -> Void
         private var monitor: Any?
 
-        init(move: @escaping (Int) -> Void) {
-            self.move = move
+        init(
+            moveFrame: @escaping (Int) -> Void,
+            moveBurst: @escaping (Int) -> Void
+        ) {
+            self.moveFrame = moveFrame
+            self.moveBurst = moveBurst
         }
 
         func install() {
@@ -959,10 +1251,16 @@ private struct CullFrameNavigationKeyHandler: NSViewRepresentable {
 
                 switch event.keyCode {
                 case 123: // left arrow
-                    self.move(-1)
+                    self.moveFrame(-1)
                     return nil
                 case 124: // right arrow
-                    self.move(1)
+                    self.moveFrame(1)
+                    return nil
+                case 126: // up arrow
+                    self.moveBurst(-1)
+                    return nil
+                case 125: // down arrow
+                    self.moveBurst(1)
                     return nil
                 default:
                     return event
@@ -1175,6 +1473,23 @@ final class CullViewModel {
         )
     }
 
+    func moveSelectedBurst(by offset: Int) {
+        guard let scanResult,
+              let burstID = CullBurstNavigation.burstID(
+                  in: scanResult.bursts,
+                  adjacentTo: selectedBurstID,
+                  offset: offset
+              ),
+              let burst = scanResult.bursts.first(where: { $0.id == burstID }) else {
+            return
+        }
+
+        selectedBurstID = burst.id
+        selectedFrameURL = burst.frames.first?.url
+        inspectionSource = nil
+        isPickingInspectionPoint = false
+    }
+
     func beginPickingInspectionPoint() {
         isPickingInspectionPoint = true
     }
@@ -1309,19 +1624,22 @@ final class CullViewModel {
                     frameURL: $0.url,
                     disposition: $0.url == selectedFrameURL ? .select : .reject
                 )
-            }
+            },
+            advanceAfterMovingBurst: burst.id
         )
     }
 
     func markAllKeeping(in burst: PhotoBurst) {
         moveDispositions(
-            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .select) }
+            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .select) },
+            advanceAfterMovingBurst: burst.id
         )
     }
 
     func markAllRejecting(in burst: PhotoBurst) {
         moveDispositions(
-            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .reject) }
+            burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .reject) },
+            advanceAfterMovingBurst: burst.id
         )
     }
 
@@ -1350,14 +1668,20 @@ final class CullViewModel {
     private func moveDispositions(
         _ requestedStates: [CullFrameDispositionState],
         recordsUndo: Bool = true,
-        advanceAfterMoving frameURL: URL? = nil
+        advanceAfterMoving frameURL: URL? = nil,
+        advanceAfterMovingBurst burstID: URL? = nil
     ) {
         guard let folderURL, !isMoving else { return }
 
         let changedStates = requestedStates.filter {
             dispositions[$0.frameURL] != $0.disposition
         }
-        guard !changedStates.isEmpty else { return }
+        guard !changedStates.isEmpty else {
+            if let burstID, let nextBurstID = nextBurstID(after: burstID) {
+                selectBurst(withID: nextBurstID)
+            }
+            return
+        }
 
         let previousStates = changedStates.map {
             CullFrameDispositionState(frameURL: $0.frameURL, disposition: dispositions[$0.frameURL])
@@ -1369,8 +1693,14 @@ final class CullViewModel {
             )
         }
         let relocationCount = relocations.filter { $0.sourceURL != $0.destinationURL }.count
-        guard relocationCount > 0 else { return }
+        guard relocationCount > 0 else {
+            if let burstID, let nextBurstID = nextBurstID(after: burstID) {
+                selectBurst(withID: nextBurstID)
+            }
+            return
+        }
         let nextFrameURL = frameURL.flatMap { self.nextFrameURL(after: $0) }
+        let nextBurstID = burstID.flatMap { self.nextBurstID(after: $0) }
 
         isMoving = true
         movingFrameCount = relocationCount
@@ -1393,6 +1723,9 @@ final class CullViewModel {
                         uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
                     )
                     self.selectedFrameURL = destinationBySource[nextFrameURL] ?? nextFrameURL
+                }
+                if let nextBurstID {
+                    self.selectBurst(withID: nextBurstID)
                 }
                 self.isMoving = false
                 self.movingFrameCount = 0
@@ -1438,6 +1771,24 @@ final class CullViewModel {
             adjacentTo: frameURL,
             offset: 1
         )
+    }
+
+    private func nextBurstID(after burstID: URL) -> URL? {
+        guard let bursts = scanResult?.bursts else { return nil }
+        let candidate = CullBurstNavigation.burstID(
+            in: bursts,
+            adjacentTo: burstID,
+            offset: 1
+        )
+        return candidate == burstID ? nil : candidate
+    }
+
+    private func selectBurst(withID burstID: URL) {
+        guard let burst = scanResult?.bursts.first(where: { $0.id == burstID }) else { return }
+        selectedBurstID = burst.id
+        selectedFrameURL = burst.frames.first?.url
+        inspectionSource = nil
+        isPickingInspectionPoint = false
     }
 
     private func destinationURL(

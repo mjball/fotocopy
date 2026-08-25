@@ -22,6 +22,19 @@ struct CullInspectionPoint: Sendable, Hashable {
     }
 }
 
+/// The photographer's current magnification and image-relative center. It is
+/// held by the burst review, rather than an individual frame preview, so
+/// switching frames compares the same detail at the same scale.
+struct CullPreviewViewport: Hashable {
+    var zoom: CGFloat
+    var center: CullInspectionPoint
+
+    init(zoom: CGFloat = 1, center: CullInspectionPoint = CullInspectionPoint(x: 0.5, y: 0.5)) {
+        self.zoom = min(max(zoom, 1), 6)
+        self.center = center
+    }
+}
+
 /// Which target drives the detailed, frame-by-frame crop review. A manual
 /// choice always takes precedence over the optional camera-recorded AF data.
 enum CullInspectionSource: Sendable, Hashable {
@@ -151,6 +164,42 @@ enum CullFrameNavigation {
         let currentIndex = frames.firstIndex { $0.url == selectedURL } ?? 0
         let nextIndex = min(max(currentIndex + offset, 0), frames.count - 1)
         return frames[nextIndex].url
+    }
+}
+
+/// The cull workspace has three presentation densities. They never change the
+/// files or the selected burst; they only decide how much surrounding UI the
+/// photo preview shares space with.
+enum CullReviewLayout: String, CaseIterable, Identifiable {
+    case browse
+    case review
+    case focus
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .browse: return "Browse"
+        case .review: return "Review"
+        case .focus: return "Focus"
+        }
+    }
+}
+
+/// Burst navigation mirrors frame navigation: the endpoints deliberately do
+/// not wrap, so an up/down press never jumps to a distant shoot.
+enum CullBurstNavigation {
+    static func burstID(
+        in bursts: [PhotoBurst],
+        adjacentTo selectedBurstID: URL?,
+        offset: Int
+    ) -> URL? {
+        guard !bursts.isEmpty else { return nil }
+        guard offset != 0 else { return selectedBurstID ?? bursts.first?.id }
+
+        let currentIndex = bursts.firstIndex { $0.id == selectedBurstID } ?? 0
+        let nextIndex = min(max(currentIndex + offset, 0), bursts.count - 1)
+        return bursts[nextIndex].id
     }
 }
 

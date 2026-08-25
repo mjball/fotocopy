@@ -153,6 +153,31 @@ import Testing
     ) == frames[0].url)
 }
 
+@Test func burstNavigationMovesVerticallyAndStopsAtEachEnd() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let bursts = [
+        PhotoBurst(frames: [makePhoto(number: 1, at: start)]),
+        PhotoBurst(frames: [makePhoto(number: 2, at: start.addingTimeInterval(2))]),
+        PhotoBurst(frames: [makePhoto(number: 3, at: start.addingTimeInterval(4))])
+    ]
+
+    #expect(CullBurstNavigation.burstID(
+        in: bursts,
+        adjacentTo: bursts[1].id,
+        offset: 1
+    ) == bursts[2].id)
+    #expect(CullBurstNavigation.burstID(
+        in: bursts,
+        adjacentTo: bursts[2].id,
+        offset: 1
+    ) == bursts[2].id)
+    #expect(CullBurstNavigation.burstID(
+        in: bursts,
+        adjacentTo: bursts[0].id,
+        offset: -1
+    ) == bursts[0].id)
+}
+
 @Test func canonAFInfo2UsesFocusedRectangleAndConvertsItsCoordinates() {
     let target = CanonAFMetadataReader.target(from: canonAFInfo2Fixture(
         focusedBitset: 0b10,
