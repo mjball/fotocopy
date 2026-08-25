@@ -1,18 +1,40 @@
 # Fotocopy
 
-A small macOS app for importing photos and videos from SD cards and external drives.
+Fotocopy is a file-first macOS app for importing, culling, and organizing photos on ordinary drives. It copies media directly into a simple date-based folder hierarchy, helps you review Canon CR3 bursts, and records your choices by moving files into normal `Keeps` and `Rejects` folders—not a proprietary photo library.
+
+Your photos stay portable: browse them in Finder, edit them in the tools you already use, and move them without an export step. Fotocopy assists with fast review and safe file operations, but it never chooses what to keep or permanently deletes an image for you.
 
 ## Features
 
-- Imports JPG, HEIC, RAW (CR2/CR3/NEF/ARW/DNG/RAF/ORF/RW2), and video (MOV/MP4/M4V)
-- Organizes files into `YYYY/MM/DD/` folders by EXIF date
-- Preview scan with interactive type, camera model, and date range filters
-- Skips duplicates using a destination manifest keyed by source folder + filename + size
-- Imports from Apple Photos libraries (recovers original camera filenames)
-- Copy or move mode (move auto-disabled for Photos libraries)
-- Auto-open when source/destination volumes mount
-- Eject source/destination after import
-- Check for updates from the menu bar (Cmd+U)
+### Import into ordinary folders
+
+- Imports JPG, HEIC, RAW (`CR2`/`CR3`/`NEF`/`ARW`/`DNG`/`RAF`/`ORF`/`RW2`), and video (`MOV`/`MP4`/`M4V`) from cards, external drives, and Apple Photos libraries.
+- Organizes imports into `YYYY/MM/DD/` folders using the capture date, while retaining original camera filenames.
+- Previews an import before copying, with file-type, camera-model, and date-range filters.
+- Supports copy or move imports; move is deliberately unavailable for Apple Photos libraries.
+- Uses a destination manifest to identify prior imports conservatively—even when cameras reuse filenames—and reconciles later Finder moves within a date folder.
+- Can open and eject source or destination volumes as part of the import flow.
+
+### Cull Canon CR3 bursts quickly
+
+- Scans a chosen date folder and its `Keeps`/`Rejects` subfolders to rebuild conservative consecutive-capture bursts from the files on disk.
+- Displays fast embedded JPEG previews, with full-resolution preview loading when you zoom; pinch, double-click, and pan directly in the main viewer. The Frames filmstrip and active detail-crop strip follow the selected frame during keyboard navigation.
+- Offers Full, Compact, and Minimal review layouts, plus a filmstrip, per-frame Keep/Reject badges, and filesystem-derived burst status: no icon before a decision, an outlined green check after a keep or outlined red X after rejects only while review is in progress, then a filled green check when the finished burst has a keeper or a filled red X when every frame is rejected.
+- Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point. When a selected frame records an active target, Fotocopy automatically activates the matching crop comparison while preserving a manual point if you chose one.
+- Provides keyboard-driven review: arrow keys navigate frames and bursts; `K`/`X` keep or reject the current frame; `⇧K` keeps the current frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
+- Applies choices immediately by moving the CR3 and its paired XMP/ON1 sidecars into `Keeps` or `Rejects`. The latest move can be undone, and a later scan or relaunch restores the decision badges from the folder structure.
+
+### Review and clean up a whole library
+
+- The Organize task scans the configured import destination for `YYYY/MM/DD/Keeps` and `Rejects` folders—there is no separate catalog to maintain.
+- Browse kept and rejected photos in a date-grouped thumbnail grid; filter by decision, date, or filename; reveal a photo in Finder or reopen its day in Cull.
+- Recheck and move all rejected photo packages to Finder’s Trash in one confirmed action. Fotocopy never permanently deletes them; restore through Finder’s Trash if needed.
+
+### Native macOS workflow
+
+- Keeps files visible and usable in Finder and other photo software at every stage.
+- Shows a quiet, live toolbar temperature readout for connected external SSDs, using macOS-provided SMART data without a password prompt.
+- Includes a standard menu bar with discoverable commands and shortcuts, persistent cull preferences, and built-in update checks.
 
 ## Install
 

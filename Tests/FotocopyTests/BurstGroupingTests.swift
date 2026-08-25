@@ -93,6 +93,78 @@ import Testing
         "BL5A1003.CR3"
     ])
     #expect(scan.bursts[0].frames.map(\.disposition) == [nil, .select, .reject])
+    #expect(!scan.bursts[0].isReviewed)
+}
+
+@Test func burstDecisionStatusShowsProgressAndFinishedResult() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let kept = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1001.CR3"),
+        filename: "BL5A1001.CR3",
+        captureDate: start,
+        dateSource: .exif,
+        sequenceNumber: 1001,
+        disposition: .select
+    )
+    let rejected = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1002.CR3"),
+        filename: "BL5A1002.CR3",
+        captureDate: start.addingTimeInterval(0.1),
+        dateSource: .exif,
+        sequenceNumber: 1002,
+        disposition: .reject
+    )
+    let unmarked = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1003.CR3"),
+        filename: "BL5A1003.CR3",
+        captureDate: start.addingTimeInterval(0.2),
+        dateSource: .exif,
+        sequenceNumber: 1003
+    )
+
+    let anotherKept = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1004.CR3"),
+        filename: "BL5A1004.CR3",
+        captureDate: start.addingTimeInterval(0.3),
+        dateSource: .exif,
+        sequenceNumber: 1004,
+        disposition: .select
+    )
+    let anotherRejected = CullPhoto(
+        url: URL(fileURLWithPath: "/tmp/BL5A1005.CR3"),
+        filename: "BL5A1005.CR3",
+        captureDate: start.addingTimeInterval(0.4),
+        dateSource: .exif,
+        sequenceNumber: 1005,
+        disposition: .reject
+    )
+
+    #expect(PhotoBurst(frames: [unmarked]).decisionStatus == nil)
+    #expect(PhotoBurst(frames: [rejected, unmarked]).decisionStatus == .rejectingInProgress)
+    #expect(PhotoBurst(frames: [kept, unmarked]).decisionStatus == .keepingInProgress)
+    #expect(PhotoBurst(frames: [kept, rejected, unmarked]).decisionStatus == .keepingInProgress)
+    #expect(PhotoBurst(frames: [kept, anotherKept]).decisionStatus == .kept)
+    #expect(PhotoBurst(frames: [kept, rejected]).decisionStatus == .kept)
+    #expect(PhotoBurst(frames: [rejected, anotherRejected]).decisionStatus == .rejected)
+    #expect(!PhotoBurst(frames: [kept, rejected, unmarked]).isReviewed)
+    #expect(PhotoBurst(frames: [kept, rejected]).isReviewed)
+}
+
+@Test func cameraAFBecomesTheDefaultOnlyWhenAvailableAndManualChoiceWins() {
+    let manual = CullInspectionSource.manual(CullInspectionPoint(x: 0.3, y: 0.7))
+
+    #expect(CullInspectionSource.automaticallySelected(
+        current: nil,
+        selectedFrameHasCameraAFTarget: false
+    ) == nil)
+    #expect(CullInspectionSource.automaticallySelected(
+        current: nil,
+        selectedFrameHasCameraAFTarget: true
+    ) == .cameraAF)
+    #expect(CullInspectionSource.automaticallySelected(
+        current: manual,
+        selectedFrameHasCameraAFTarget: true
+    ) == manual)
 }
 
 @Test func inspectionPointUsesOnlyTheVisibleAspectFitImage() {
@@ -176,6 +248,69 @@ import Testing
         adjacentTo: bursts[0].id,
         offset: -1
     ) == bursts[0].id)
+}
+
+@Test func cullKeyboardShortcutsMapFrameAndBurstDecisions() {
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 40,
+        charactersIgnoringModifiers: "k",
+        shiftPressed: false
+    ) == .keepCurrentFrame)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 40,
+        charactersIgnoringModifiers: "K",
+        shiftPressed: true
+    ) == .keepCurrentAndRejectRest)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 7,
+        charactersIgnoringModifiers: "x",
+        shiftPressed: false
+    ) == .rejectCurrentFrame)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 7,
+        charactersIgnoringModifiers: "X",
+        shiftPressed: true
+    ) == .rejectBurst)
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 123,
+        charactersIgnoringModifiers: nil,
+        shiftPressed: false
+    ) == .moveFrame(-1))
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 125,
+        charactersIgnoringModifiers: nil,
+        shiftPressed: false
+    ) == .moveBurst(1))
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 123,
+        charactersIgnoringModifiers: nil,
+        shiftPressed: true
+    ) == nil)
+}
+
+@Test func externalSSDTemperatureUsesSmartKelvinAndRejectsNonSSDs() throws {
+    let bar = try #require(ExternalDriveTemperatureReader.reading(
+        from: [
+            "Internal": false,
+            "SolidState": true,
+            "ParentWholeDisk": "disk5",
+            "VolumeName": "BAR",
+            "SMARTDeviceSpecificKeysMayVaryNotGuaranteed": ["TEMPERATURE": 321]
+        ],
+        mountURL: URL(fileURLWithPath: "/Volumes/BAR")
+    ))
+    #expect(bar.id == "disk5")
+    #expect(bar.volumeName == "BAR")
+    #expect(bar.temperatureCelsius == 48)
+
+    #expect(ExternalDriveTemperatureReader.reading(
+        from: ["Internal": true, "SolidState": true, "DeviceIdentifier": "disk0"],
+        mountURL: URL(fileURLWithPath: "/")
+    ) == nil)
+    #expect(ExternalDriveTemperatureReader.reading(
+        from: ["Internal": false, "SolidState": false, "DeviceIdentifier": "disk6"],
+        mountURL: URL(fileURLWithPath: "/Volumes/HDD")
+    ) == nil)
 }
 
 @Test func canonAFInfo2UsesFocusedRectangleAndConvertsItsCoordinates() {

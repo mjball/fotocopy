@@ -45,6 +45,18 @@ enum CullInspectionSource: Sendable, Hashable {
         guard case let .manual(point) = self else { return nil }
         return point
     }
+
+    /// Camera AF can become the default comparison target once metadata is
+    /// available, but a photographer's manual point must always win. Keeping
+    /// this policy separate makes the asynchronous AF reader predictable when
+    /// the selected frame changes inside a burst.
+    static func automaticallySelected(
+        current: CullInspectionSource?,
+        selectedFrameHasCameraAFTarget: Bool
+    ) -> CullInspectionSource? {
+        guard current == nil, selectedFrameHasCameraAFTarget else { return current }
+        return .cameraAF
+    }
 }
 
 enum CullInspectionGeometry {
@@ -138,6 +150,31 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
 
     var id: URL { frames[0].url }
     var firstFrame: CullPhoto { frames[0] }
+
+    /// The sidebar status intentionally answers two fast culling questions:
+    /// whether this burst has produced a keeper, and whether any frame still
+    /// needs a decision. It is derived from the frames' on-disk locations.
+    var decisionStatus: BurstDecisionStatus? {
+        guard !frames.isEmpty else { return nil }
+
+        let hasKeep = frames.contains { $0.disposition == .select }
+        let hasReject = frames.contains { $0.disposition == .reject }
+        let hasUndecided = frames.contains { $0.disposition == nil }
+
+        guard hasKeep || hasReject else { return nil }
+        if hasUndecided {
+            return hasKeep ? .keepingInProgress : .rejectingInProgress
+        }
+        return hasKeep ? .kept : .rejected
+    }
+
+    /// A burst is reviewed only when every frame has an explicit, on-disk
+    /// decision. The status remains filesystem-derived and is never stored
+    /// separately from the individual Keep/Reject moves.
+    var isReviewed: Bool {
+        decisionStatus?.isComplete == true
+    }
+
     var title: String {
         guard let lastFrame = frames.last, lastFrame.url != firstFrame.url else {
             return firstFrame.filename
@@ -147,6 +184,25 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
 
     var captureRange: (start: Date?, end: Date?) {
         (frames.first?.captureDate, frames.last?.captureDate)
+    }
+}
+
+/// Sidebar status for a burst with at least one culling decision. An outlined
+/// glyph means further decisions remain; a filled glyph means review is
+/// complete. Green has priority whenever at least one frame is kept.
+enum BurstDecisionStatus: Equatable, Sendable {
+    case keepingInProgress
+    case rejectingInProgress
+    case kept
+    case rejected
+
+    var isComplete: Bool {
+        switch self {
+        case .keepingInProgress, .rejectingInProgress:
+            false
+        case .kept, .rejected:
+            true
+        }
     }
 }
 
@@ -179,9 +235,9 @@ enum CullReviewLayout: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .browse: return "Browse"
-        case .review: return "Review"
-        case .focus: return "Focus"
+        case .browse: return "Full"
+        case .review: return "Compact"
+        case .focus: return "Minimal"
         }
     }
 }
@@ -207,6 +263,53 @@ enum CullBurstNavigation {
         let currentIndex = bursts.firstIndex { $0.id == selectedBurstID } ?? 0
         let nextIndex = min(max(currentIndex + offset, 0), bursts.count - 1)
         return bursts[nextIndex].id
+    }
+}
+
+/// The compact, plain-key culling vocabulary. Decision keys are deliberately
+/// separate from navigation keys so photographers can work through a burst
+/// without modifier chords or changing their current review layout.
+enum CullKeyboardAction: Equatable {
+    case moveFrame(Int)
+    case moveBurst(Int)
+    case keepCurrentFrame
+    case keepCurrentAndRejectRest
+    case rejectCurrentFrame
+    case rejectBurst
+
+    var isDecision: Bool {
+        switch self {
+        case .moveFrame, .moveBurst:
+            false
+        case .keepCurrentFrame, .keepCurrentAndRejectRest, .rejectCurrentFrame, .rejectBurst:
+            true
+        }
+    }
+}
+
+enum CullKeyboardShortcuts {
+    static func action(
+        keyCode: UInt16,
+        charactersIgnoringModifiers: String?,
+        shiftPressed: Bool
+    ) -> CullKeyboardAction? {
+        switch charactersIgnoringModifiers?.lowercased() {
+        case "k":
+            return shiftPressed ? .keepCurrentAndRejectRest : .keepCurrentFrame
+        case "x":
+            return shiftPressed ? .rejectBurst : .rejectCurrentFrame
+        default:
+            break
+        }
+
+        guard !shiftPressed else { return nil }
+        switch keyCode {
+        case 123: return .moveFrame(-1) // left arrow
+        case 124: return .moveFrame(1) // right arrow
+        case 126: return .moveBurst(-1) // up arrow
+        case 125: return .moveBurst(1) // down arrow
+        default: return nil
+        }
     }
 }
 

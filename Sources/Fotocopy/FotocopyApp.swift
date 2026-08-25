@@ -5,10 +5,21 @@ import AppKit
 struct FotocopyApp: App {
     @NSApplicationDelegateAdaptor(FotocopyApplicationDelegate.self) private var appDelegate
     @State private var isChecking = false
+    @State private var cullModel = CullViewModel()
+    @State private var cullReviewLayout: CullReviewLayout = .browse
+    @State private var driveTemperatureMonitor = ExternalDriveTemperatureMonitor()
+    @AppStorage(PreferenceKeys.activeWorkspace) private var workspaceRaw = FotocopyWorkspace.importPhotos.rawValue
 
     var body: some Scene {
         WindowGroup {
-            FotocopyShellView()
+            FotocopyShellView(
+                cullModel: cullModel,
+                cullReviewLayout: $cullReviewLayout,
+                driveTemperatureMonitor: driveTemperatureMonitor
+            )
+            .task {
+                driveTemperatureMonitor.start()
+            }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 980, height: 700)
@@ -51,8 +62,29 @@ struct FotocopyApp: App {
                     )
                 }
                 .keyboardShortcut("3", modifiers: .command)
+
+                Divider()
+                Toggle("Show Camera AF Target", isOn: cameraAFTargetVisibility)
+                    .keyboardShortcut("a", modifiers: [.command, .option])
             }
+
+            CullCommands(
+                model: cullModel,
+                workspace: FotocopyWorkspace(rawValue: workspaceRaw) ?? .importPhotos,
+                layout: $cullReviewLayout
+            )
         }
+    }
+
+    private var cameraAFTargetVisibility: Binding<Bool> {
+        Binding(
+            get: {
+                UserDefaults.standard.object(forKey: PreferenceKeys.cullShowsAFTarget) as? Bool ?? true
+            },
+            set: {
+                UserDefaults.standard.set($0, forKey: PreferenceKeys.cullShowsAFTarget)
+            }
+        )
     }
 
     private func checkForUpdates() {
@@ -108,5 +140,202 @@ struct FotocopyApp: App {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+/// Mirrors Cull's on-screen controls in the macOS menu bar. This makes each
+/// shortcut discoverable without inventing a second, hidden input vocabulary.
+private struct CullCommands: Commands {
+    @Bindable var model: CullViewModel
+    let workspace: FotocopyWorkspace
+    @Binding var layout: CullReviewLayout
+
+    private var isCullActive: Bool {
+        workspace == .cullBursts
+    }
+
+    private var selectedBurst: PhotoBurst? {
+        model.selectedBurst
+    }
+
+    private var canReviewBurst: Bool {
+        isCullActive &&
+            selectedBurst != nil &&
+            model.selectedFrameURL != nil &&
+            !model.isScanning &&
+            !model.isMoving
+    }
+
+    private var canUseCameraAFTarget: Bool {
+        guard canReviewBurst, let selectedFrameURL = model.selectedFrameURL else { return false }
+        return model.cameraAFTarget(for: selectedFrameURL) != nil
+    }
+
+    var body: some Commands {
+        CommandMenu("Cull") {
+            Button("Choose Cull Folder…") {
+                model.chooseFolder()
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .disabled(!isCullActive || model.isScanning || model.isMoving)
+
+            Menu("Recent Import") {
+                if model.recentImportedFolders.isEmpty {
+                    Text("No completed Fotocopy import yet")
+                } else {
+                    ForEach(model.recentImportedFolders, id: \.path) { folder in
+                        Button(folder.path) {
+                            model.requestUse(folder: folder)
+                        }
+                    }
+                }
+            }
+            .disabled(!isCullActive || model.isScanning || model.isMoving)
+
+            if model.isScanning {
+                Button("Cancel Scan") {
+                    model.cancel()
+                }
+            } else {
+                Button("Rescan") {
+                    model.scan()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!isCullActive || model.folderURL == nil || model.isMoving)
+            }
+
+            Divider()
+
+            Button("Previous Frame") {
+                moveFrame(by: -1)
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [])
+            .disabled(!canReviewBurst)
+
+            Button("Next Frame") {
+                moveFrame(by: 1)
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [])
+            .disabled(!canReviewBurst)
+
+            Button("Previous Burst") {
+                model.moveSelectedBurst(by: -1)
+            }
+            .keyboardShortcut(.upArrow, modifiers: [])
+            .disabled(!canReviewBurst)
+
+            Button("Next Burst") {
+                model.moveSelectedBurst(by: 1)
+            }
+            .keyboardShortcut(.downArrow, modifiers: [])
+            .disabled(!canReviewBurst)
+
+            Divider()
+
+            Button("Keep Current Frame") {
+                model.keepSelectedFrame()
+            }
+            .keyboardShortcut("k", modifiers: [])
+            .disabled(!canReviewBurst)
+
+            Button("Reject Current Frame") {
+                model.rejectSelectedFrame()
+            }
+            .keyboardShortcut("x", modifiers: [])
+            .disabled(!canReviewBurst)
+
+            Button("Keep Current, Reject Rest") {
+                keepCurrentAndRejectRest()
+            }
+            .keyboardShortcut("k", modifiers: .shift)
+            .disabled(!canReviewBurst)
+
+            Button("Reject All in Burst") {
+                rejectBurst()
+            }
+            .keyboardShortcut("x", modifiers: .shift)
+            .disabled(!canReviewBurst)
+
+            Divider()
+
+            Button("Keep All in Burst") {
+                keepBurst()
+            }
+            .disabled(!canReviewBurst)
+
+            Button("Clear Burst Marks") {
+                clearBurstMarks()
+            }
+            .disabled(!canReviewBurst)
+
+            Button("Undo Last Cull Move") {
+                model.undoLastMove()
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(!isCullActive || !model.canUndoLastMove)
+
+            Divider()
+
+            Button("Reveal Cull Folder in Finder") {
+                model.revealFolder()
+            }
+            .disabled(!isCullActive || model.folderURL == nil)
+
+            Button("Reveal Selected Frame in Finder") {
+                model.revealSelectedFrame()
+            }
+            .disabled(!canReviewBurst)
+
+            Divider()
+
+            Menu("Review Layout") {
+                ForEach(CullReviewLayout.allCases) { candidate in
+                    Button(candidate.title) {
+                        layout = candidate
+                    }
+                }
+            }
+            .disabled(!isCullActive || model.folderURL == nil)
+
+            Button("Use Camera AF Target") {
+                model.useCameraAFTarget()
+            }
+            .disabled(!canUseCameraAFTarget)
+
+            Button("Pick Detail Manually") {
+                model.beginPickingInspectionPoint()
+            }
+            .disabled(!canReviewBurst)
+
+            Button("Clear Inspection Target") {
+                model.clearInspectionPoint()
+            }
+            .disabled(!canReviewBurst || model.inspectionSource == nil)
+        }
+    }
+
+    private func moveFrame(by offset: Int) {
+        guard let selectedBurst else { return }
+        model.moveSelectedFrame(in: selectedBurst, by: offset)
+    }
+
+    private func keepCurrentAndRejectRest() {
+        guard let selectedBurst else { return }
+        model.keepSelectedAndRejectRest(in: selectedBurst)
+    }
+
+    private func rejectBurst() {
+        guard let selectedBurst else { return }
+        model.markAllRejecting(in: selectedBurst)
+    }
+
+    private func keepBurst() {
+        guard let selectedBurst else { return }
+        model.markAllKeeping(in: selectedBurst)
+    }
+
+    private func clearBurstMarks() {
+        guard let selectedBurst else { return }
+        model.clearDispositions(in: selectedBurst)
     }
 }

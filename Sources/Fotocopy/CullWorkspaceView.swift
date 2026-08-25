@@ -11,47 +11,6 @@ struct CullWorkspaceView: View {
         .task {
             model.resumeLastScanIfNeeded()
         }
-        .toolbar {
-            if model.folderURL != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Picker("Cull layout", selection: $layout) {
-                        ForEach(CullReviewLayout.allCases) { layout in
-                            Text(layout.title).tag(layout)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 220)
-                    .help("Choose how much surrounding UI is shown while reviewing bursts")
-                }
-            }
-            if model.isScanning {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.cancel()
-                    } label: {
-                        Label("Cancel Scan", systemImage: "xmark")
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .help("Cancel the current burst scan")
-                }
-            } else if model.folderURL != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.scan()
-                    } label: {
-                        Label("Rescan", systemImage: "arrow.clockwise")
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .disabled(model.isMoving)
-                    .help("Scan this folder again for bursts")
-                }
-            }
-        }
         .alert("Could not scan folder", isPresented: $model.showError) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -137,12 +96,18 @@ struct CullSidebarSections: View {
             if !scan.bursts.isEmpty {
                 Section("Bursts") {
                     ForEach(scan.bursts) { burst in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(burst.title)
-                                .lineLimit(1)
-                            Text("\(burst.frames.count) frames · \(captureRangeLabel(for: burst))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack(alignment: .center, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(burst.title)
+                                    .lineLimit(1)
+                                Text("\(burst.frames.count) frames · \(captureRangeLabel(for: burst))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            if let status = burst.decisionStatus {
+                                BurstDecisionStatusIcon(status: status)
+                            }
                         }
                         .tag(FotocopySidebarDestination.burst(burst.id))
                     }
@@ -196,7 +161,6 @@ struct CullSidebarSections: View {
 
     private var chooseFolderButton: some View {
         Button("Choose Folder…") { model.chooseFolder() }
-            .keyboardShortcut("o", modifiers: .command)
             .controlSize(.small)
             .buttonStyle(.bordered)
             .disabled(model.isScanning || model.isMoving)
@@ -227,6 +191,55 @@ struct CullSidebarSections: View {
             return "\(formatter.string(from: start)) – \(formatter.string(from: end))"
         }
         return formatter.string(from: start)
+    }
+}
+
+/// An outline means a burst still has undecided frames; a filled glyph means
+/// the burst is complete. The green check wins once a burst has a keeper, so
+/// the sidebar stays legible without showing multiple status icons per row.
+private struct BurstDecisionStatusIcon: View {
+    let status: BurstDecisionStatus
+
+    private var systemImage: String {
+        switch status {
+        case .keepingInProgress:
+            "checkmark.circle"
+        case .rejectingInProgress:
+            "xmark.circle"
+        case .kept:
+            "checkmark.circle.fill"
+        case .rejected:
+            "xmark.circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .keepingInProgress, .kept:
+            .green
+        case .rejectingInProgress, .rejected:
+            .red
+        }
+    }
+
+    private var accessibilityDescription: String {
+        switch status {
+        case .keepingInProgress:
+            "In progress: at least one frame kept"
+        case .rejectingInProgress:
+            "In progress: frames rejected, no frame kept yet"
+        case .kept:
+            "Reviewed: at least one frame kept"
+        case .rejected:
+            "Reviewed: every frame rejected"
+        }
+    }
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .foregroundStyle(color)
+            .accessibilityLabel(accessibilityDescription)
+            .help(accessibilityDescription)
     }
 }
 
@@ -273,6 +286,18 @@ private struct BurstReviewView: View {
                 },
                 moveBurst: { offset in
                     model.moveSelectedBurst(by: offset)
+                },
+                keepCurrentFrame: {
+                    model.keepSelectedFrame()
+                },
+                keepCurrentAndRejectRest: {
+                    model.keepSelectedAndRejectRest(in: burst)
+                },
+                rejectCurrentFrame: {
+                    model.rejectSelectedFrame()
+                },
+                rejectBurst: {
+                    model.markAllRejecting(in: burst)
                 }
             )
             .frame(width: 0, height: 0)
@@ -324,7 +349,8 @@ private struct BurstReviewView: View {
             }
             .disabled(model.isMoving)
 
-            ScrollView(.horizontal) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(burst.frames) { frame in
                         Button {
@@ -361,9 +387,14 @@ private struct BurstReviewView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(frame.filename)
+                        .id(frame.url)
                     }
                 }
                 .padding(.bottom, 4)
+                }
+                .task(id: model.selectedFrameURL) {
+                    await scrollSelectedFrame(model.selectedFrameURL, using: proxy)
+                }
             }
 
             if let inspectionSource = model.inspectionSource {
@@ -494,8 +525,6 @@ private struct BurstReviewView: View {
                 Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Toggle("Show camera AF target", isOn: $showsCameraAFTarget)
-                    .controlSize(.small)
                 if !model.isUsingCameraAFTarget {
                     Button("Use camera AF target") {
                         model.useCameraAFTarget()
@@ -622,9 +651,6 @@ private struct BurstReviewView: View {
                 .disabled(model.isMoving)
             }
 
-            Toggle("AF Target", isOn: $showsCameraAFTarget)
-                .toggleStyle(.button)
-
             Menu("More") {
                 if burst.frames.count > 1, selectedFrame != nil {
                     Button("Keep selected, reject \(burst.frames.count - 1)") {
@@ -644,7 +670,6 @@ private struct BurstReviewView: View {
                         model.clearInspectionPoint()
                     }
                 }
-                Toggle("Show camera AF target", isOn: $showsCameraAFTarget)
             }
             .disabled(model.isMoving)
         }
@@ -652,7 +677,8 @@ private struct BurstReviewView: View {
     }
 
     private var compactFilmstrip: some View {
-        ScrollView(.horizontal) {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
             HStack(spacing: 9) {
                 ForEach(burst.frames) { frame in
                     Button {
@@ -680,12 +706,29 @@ private struct BurstReviewView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(frame.filename)
+                    .id(frame.url)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 16)
+            }
+            .task(id: model.selectedFrameURL) {
+                await scrollSelectedFrame(model.selectedFrameURL, using: proxy)
+            }
         }
         .frame(height: 76)
+    }
+
+    /// Wait one SwiftUI update so the selected card has entered the horizontal
+    /// layout, then center it. The task is keyed to the selection, so fast
+    /// arrow navigation cancels an obsolete request instead of scrolling back.
+    private func scrollSelectedFrame(_ frameURL: URL?, using proxy: ScrollViewProxy) async {
+        guard let frameURL else { return }
+        await Task.yield()
+        guard !Task.isCancelled, model.selectedFrameURL == frameURL else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            proxy.scrollTo(frameURL, anchor: .center)
+        }
     }
 
     private func resizePreview(by translation: CGFloat) {
@@ -817,7 +860,8 @@ private struct CullInspectionPreviewView: View {
     @State private var image: NSImage?
     @State private var didFail = false
     @State private var fullPreview: NSImage?
-    @State private var fullPreviewDidFail = false
+    @State private var fullPreviewState: FullPreviewState = .idle
+    @State private var fullPreviewRetryCount = 0
     @GestureState private var gestureMagnification: CGFloat = 1
     @GestureState private var gestureTranslation: CGSize = .zero
 
@@ -826,7 +870,13 @@ private struct CullInspectionPreviewView: View {
     }
 
     private var fullPreviewRequestID: String {
-        effectiveZoom > 1.02 ? "\(url.path)#full-preview" : ""
+        guard effectiveZoom > 1.02,
+              image != nil,
+              fullPreview == nil,
+              fullPreviewState != .failed else {
+            return ""
+        }
+        return "\(url.path)#full-preview#\(fullPreviewRetryCount)"
     }
 
     var body: some View {
@@ -847,7 +897,8 @@ private struct CullInspectionPreviewView: View {
             image = nil
             didFail = false
             fullPreview = nil
-            fullPreviewDidFail = false
+            fullPreviewState = .idle
+            fullPreviewRetryCount = 0
             let loaded = await Task.detached(priority: .userInitiated) {
                 CullPreviewCache.shared.preview(for: url, maxPixelSize: CullPreviewSize.large.maxPixelSize)
             }.value
@@ -859,13 +910,18 @@ private struct CullInspectionPreviewView: View {
             guard !fullPreviewRequestID.isEmpty,
                   image != nil,
                   fullPreview == nil,
-                  !fullPreviewDidFail else { return }
-            let loaded = await Task.detached(priority: .userInitiated) {
-                CullPreviewCache.shared.fullPreview(for: url)
-            }.value
+                  fullPreviewState != .failed else { return }
+            let requestID = fullPreviewRequestID
+            fullPreviewState = .loading
+            let loaded = await CullPreviewCache.shared.fullPreview(for: url)
             guard !Task.isCancelled else { return }
-            fullPreview = loaded
-            fullPreviewDidFail = loaded == nil
+            guard fullPreviewRequestID == requestID else { return }
+            if let loaded {
+                fullPreview = loaded
+                fullPreviewState = .idle
+            } else {
+                fullPreviewState = .failed
+            }
         }
         .onChange(of: isPickingInspectionPoint) { _, isPicking in
             if isPicking {
@@ -978,16 +1034,36 @@ private struct CullInspectionPreviewView: View {
                 }
             }
 
-            if effectiveZoom > 1.02, fullPreview == nil, !fullPreviewDidFail {
-                Label("Loading full JPEG preview…", systemImage: "arrow.down.circle")
-                    .font(.caption)
-                    .padding(8)
-                    .background(.black.opacity(0.72), in: Capsule())
-                    .foregroundStyle(.white)
+            if effectiveZoom > 1.02, fullPreview == nil {
+                switch fullPreviewState {
+                case .idle, .loading:
+                    Label("Loading full JPEG preview…", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                        .padding(8)
+                        .background(.black.opacity(0.72), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .allowsHitTesting(false)
+                case .failed:
+                    Button {
+                        retryFullPreview()
+                    } label: {
+                        Label("Full JPEG preview unavailable — Retry", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                            .padding(8)
+                            .background(.black.opacity(0.72), in: Capsule())
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
                     .padding(10)
-                    .allowsHitTesting(false)
+                }
             }
         }
+    }
+
+    private func retryFullPreview() {
+        fullPreviewState = .idle
+        fullPreviewRetryCount += 1
     }
 
     private func panGesture(in containerSize: CGSize, imageSize: CGSize) -> some Gesture {
@@ -1063,6 +1139,39 @@ private struct CullInspectionPreviewView: View {
     }
 }
 
+private enum FullPreviewState: Equatable {
+    case idle
+    case loading
+    case failed
+}
+
+/// Full-resolution previews can be large enough to saturate a slower external
+/// volume. This gate permits only one ImageIO decode at a time. A cancelled
+/// request that was waiting acquires and releases the gate without decoding,
+/// so rapid frame navigation cannot create a backlog of stale reads.
+private actor CullFullPreviewGate {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 private struct CullInspectionCropSection: View {
     let burst: PhotoBurst
     let inspectionSource: CullInspectionSource
@@ -1084,7 +1193,8 @@ private struct CullInspectionCropSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            ScrollView(.horizontal) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 10) {
                     ForEach(burst.frames) { frame in
                         Button {
@@ -1110,9 +1220,14 @@ private struct CullInspectionCropSection: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Inspection crop for \(frame.filename)")
+                        .id(frame.url)
                     }
                 }
                 .padding(.bottom, 4)
+                }
+                .task(id: model.selectedFrameURL) {
+                    await scrollSelectedFrame(model.selectedFrameURL, using: proxy)
+                }
             }
 
             Label(
@@ -1131,6 +1246,18 @@ private struct CullInspectionCropSection: View {
     private func captureLabel(_ frame: CullPhoto) -> String {
         guard let date = frame.captureDate else { return "No capture time" }
         return date.formatted(date: .omitted, time: .standard)
+    }
+
+    /// Match the Frames filmstrip whenever keyboard navigation changes the
+    /// selected frame. Yielding lets the lazy crop card join the scroll view
+    /// before scrolling to it.
+    private func scrollSelectedFrame(_ frameURL: URL?, using proxy: ScrollViewProxy) async {
+        guard let frameURL else { return }
+        await Task.yield()
+        guard !Task.isCancelled, model.selectedFrameURL == frameURL else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            proxy.scrollTo(frameURL, anchor: .center)
+        }
     }
 
     private var cropDescription: String {
@@ -1208,9 +1335,20 @@ private struct CullInspectionCropView: View {
 private struct CullNavigationKeyHandler: NSViewRepresentable {
     let moveFrame: (Int) -> Void
     let moveBurst: (Int) -> Void
+    let keepCurrentFrame: () -> Void
+    let keepCurrentAndRejectRest: () -> Void
+    let rejectCurrentFrame: () -> Void
+    let rejectBurst: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(moveFrame: moveFrame, moveBurst: moveBurst)
+        Coordinator(
+            moveFrame: moveFrame,
+            moveBurst: moveBurst,
+            keepCurrentFrame: keepCurrentFrame,
+            keepCurrentAndRejectRest: keepCurrentAndRejectRest,
+            rejectCurrentFrame: rejectCurrentFrame,
+            rejectBurst: rejectBurst
+        )
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -1221,6 +1359,10 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.moveFrame = moveFrame
         context.coordinator.moveBurst = moveBurst
+        context.coordinator.keepCurrentFrame = keepCurrentFrame
+        context.coordinator.keepCurrentAndRejectRest = keepCurrentAndRejectRest
+        context.coordinator.rejectCurrentFrame = rejectCurrentFrame
+        context.coordinator.rejectBurst = rejectBurst
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -1230,39 +1372,74 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
     final class Coordinator {
         var moveFrame: (Int) -> Void
         var moveBurst: (Int) -> Void
+        var keepCurrentFrame: () -> Void
+        var keepCurrentAndRejectRest: () -> Void
+        var rejectCurrentFrame: () -> Void
+        var rejectBurst: () -> Void
         private var monitor: Any?
 
         init(
             moveFrame: @escaping (Int) -> Void,
-            moveBurst: @escaping (Int) -> Void
+            moveBurst: @escaping (Int) -> Void,
+            keepCurrentFrame: @escaping () -> Void,
+            keepCurrentAndRejectRest: @escaping () -> Void,
+            rejectCurrentFrame: @escaping () -> Void,
+            rejectBurst: @escaping () -> Void
         ) {
             self.moveFrame = moveFrame
             self.moveBurst = moveBurst
+            self.keepCurrentFrame = keepCurrentFrame
+            self.keepCurrentAndRejectRest = keepCurrentAndRejectRest
+            self.rejectCurrentFrame = rejectCurrentFrame
+            self.rejectBurst = rejectBurst
         }
 
         func install() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self,
+                      NSApp.modalWindow == nil,
+                      event.window?.attachedSheet == nil,
                       !Self.isEditingText(in: event.window),
-                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else {
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                      let action = CullKeyboardShortcuts.action(
+                          keyCode: event.keyCode,
+                          charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                          shiftPressed: event.modifierFlags.contains(.shift)
+                      ) else {
                     return event
                 }
 
-                switch event.keyCode {
-                case 123: // left arrow
+                if event.isARepeat, action.isDecision {
+                    return nil
+                }
+
+                switch action {
+                case .moveFrame(-1):
                     self.moveFrame(-1)
                     return nil
-                case 124: // right arrow
+                case .moveFrame(1):
                     self.moveFrame(1)
                     return nil
-                case 126: // up arrow
+                case .moveBurst(-1):
                     self.moveBurst(-1)
                     return nil
-                case 125: // down arrow
+                case .moveBurst(1):
                     self.moveBurst(1)
                     return nil
-                default:
+                case .keepCurrentFrame:
+                    self.keepCurrentFrame()
+                    return nil
+                case .keepCurrentAndRejectRest:
+                    self.keepCurrentAndRejectRest()
+                    return nil
+                case .rejectCurrentFrame:
+                    self.rejectCurrentFrame()
+                    return nil
+                case .rejectBurst:
+                    self.rejectBurst()
+                    return nil
+                case .moveFrame, .moveBurst:
                     return event
                 }
             }
@@ -1597,6 +1774,7 @@ final class CullViewModel {
 
     func selectFrame(_ url: URL) {
         selectedFrameURL = url
+        automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
     func moveSelectedFrame(in burst: PhotoBurst, by offset: Int) {
@@ -1605,6 +1783,7 @@ final class CullViewModel {
             adjacentTo: selectedFrameURL,
             offset: offset
         )
+        automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
     func moveSelectedBurst(by offset: Int) {
@@ -1694,13 +1873,18 @@ final class CullViewModel {
     }
 
     private func automaticallyUseCameraAFTarget(for burst: PhotoBurst) {
-        guard inspectionSource == nil,
-              selectedBurstID == burst.id,
-              let selectedFrameURL,
-              cameraAFTargets[selectedFrameURL] != nil else {
-            return
-        }
-        inspectionSource = .cameraAF
+        guard selectedBurstID == burst.id else { return }
+        automaticallyUseCameraAFTargetForSelectedFrame()
+    }
+
+    /// A burst's AF data arrives asynchronously. Re-evaluate the selected
+    /// frame both after that read finishes and after Left/Right changes it, so
+    /// a later frame with a target immediately enables its crop comparison.
+    private func automaticallyUseCameraAFTargetForSelectedFrame() {
+        inspectionSource = CullInspectionSource.automaticallySelected(
+            current: inspectionSource,
+            selectedFrameHasCameraAFTarget: selectedFrameURL.flatMap { cameraAFTargets[$0] } != nil
+        )
     }
 
     private nonisolated static func readCameraAFTargets(
@@ -1745,6 +1929,18 @@ final class CullViewModel {
     func toggleRejecting(_ url: URL) {
         let disposition: CullDisposition? = isRejecting(url) ? nil : .reject
         moveDisposition(of: url, to: disposition, advanceAfterMove: disposition != nil)
+    }
+
+    /// Keyboard decisions are idempotent: repeated K or X presses never turn
+    /// a prior decision back into an unmarked frame.
+    func keepSelectedFrame() {
+        guard let selectedFrameURL else { return }
+        moveDisposition(of: selectedFrameURL, to: .select, advanceAfterMove: true)
+    }
+
+    func rejectSelectedFrame() {
+        guard let selectedFrameURL else { return }
+        moveDisposition(of: selectedFrameURL, to: .reject, advanceAfterMove: true)
     }
 
     func keepSelectedAndRejectRest(in burst: PhotoBurst) {
@@ -1811,6 +2007,9 @@ final class CullViewModel {
             dispositions[$0.frameURL] != $0.disposition
         }
         guard !changedStates.isEmpty else {
+            if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
+                selectedFrameURL = nextFrameURL
+            }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectBurst(withID: nextBurstID)
             }
@@ -1828,6 +2027,9 @@ final class CullViewModel {
         }
         let relocationCount = relocations.filter { $0.sourceURL != $0.destinationURL }.count
         guard relocationCount > 0 else {
+            if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
+                selectedFrameURL = nextFrameURL
+            }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectBurst(withID: nextBurstID)
             }
@@ -2045,6 +2247,7 @@ private final class CullPreviewCache: @unchecked Sendable {
     private let previews = NSCache<NSString, NSImage>()
     private let fullPreviews = NSCache<NSURL, NSImage>()
     private let focusCrops = NSCache<NSString, NSImage>()
+    private let fullPreviewGate = CullFullPreviewGate()
 
     /// Crop extraction can require decoding a much larger embedded JPEG than a
     /// normal cull preview. Keep that I/O bounded so a long burst does not
@@ -2068,12 +2271,31 @@ private final class CullPreviewCache: @unchecked Sendable {
         return image
     }
 
-    func fullPreview(for url: URL) -> NSImage? {
+    func fullPreview(for url: URL) async -> NSImage? {
         let key = url as NSURL
         if let cached = fullPreviews.object(forKey: key) { return cached }
-        guard let image = image(for: url, maxPixelSize: 16_384) else { return nil }
-        fullPreviews.setObject(image, forKey: key, cost: imageCost(image))
-        return image
+
+        await fullPreviewGate.acquire()
+        guard !Task.isCancelled else {
+            await fullPreviewGate.release()
+            return nil
+        }
+        if let cached = fullPreviews.object(forKey: key) {
+            await fullPreviewGate.release()
+            return cached
+        }
+
+        // ImageIO's CR3 decode cannot be interrupted once it begins, but the
+        // gate above prevents cancelled frame requests from starting another
+        // expensive decode while this one is in progress.
+        let decoded = await Task.detached(priority: .userInitiated) { [self] in
+            image(for: url, maxPixelSize: 16_384)
+        }.value
+        if let decoded {
+            fullPreviews.setObject(decoded, forKey: key, cost: imageCost(decoded))
+        }
+        await fullPreviewGate.release()
+        return decoded
     }
 
     func focusCrop(for url: URL, around point: CullInspectionPoint) -> NSImage? {

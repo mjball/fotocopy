@@ -43,9 +43,10 @@ enum FotocopySidebarDestination: Hashable {
 /// folders, rather than separate applications or a managed photo library.
 struct FotocopyShellView: View {
     @AppStorage(PreferenceKeys.activeWorkspace) private var workspaceRaw = FotocopyWorkspace.importPhotos.rawValue
-    @State private var cullModel = CullViewModel()
+    @Bindable var cullModel: CullViewModel
     @State private var sidebarSelection: FotocopySidebarDestination?
-    @State private var cullReviewLayout: CullReviewLayout = .browse
+    @Binding var cullReviewLayout: CullReviewLayout
+    @Bindable var driveTemperatureMonitor: ExternalDriveTemperatureMonitor
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
 
     private var workspace: FotocopyWorkspace {
@@ -60,6 +61,51 @@ struct FotocopyShellView: View {
             workspaceDetail
         }
         .navigationTitle(workspace.windowTitle)
+        .toolbar {
+            if workspace == .cullBursts {
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 10) {
+                        if cullModel.folderURL != nil {
+                            CullReviewLayoutToolbarControl(layout: $cullReviewLayout)
+                        }
+
+                        if cullModel.folderURL != nil, driveTemperatureMonitor.primaryReading != nil {
+                            Divider()
+                                .frame(height: 22)
+                        }
+
+                        ExternalDriveTemperatureToolbarStatus(monitor: driveTemperatureMonitor)
+
+                        if cullModel.isScanning {
+                            Button {
+                                cullModel.cancel()
+                            } label: {
+                                Label("Cancel", systemImage: "xmark")
+                            }
+                            .labelStyle(.titleAndIcon)
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                            .help("Cancel the current burst scan")
+                        } else if cullModel.folderURL != nil {
+                            Button {
+                                cullModel.scan()
+                            } label: {
+                                Label("Rescan", systemImage: "arrow.clockwise")
+                            }
+                            .labelStyle(.titleAndIcon)
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                            .disabled(cullModel.isMoving)
+                            .help("Scan this folder again for bursts")
+                        }
+                    }
+                }
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    ExternalDriveTemperatureToolbarStatus(monitor: driveTemperatureMonitor)
+                }
+            }
+        }
         .onAppear {
             if sidebarSelection == nil {
                 synchronizeSidebarSelectionWithWorkspace()
@@ -165,6 +211,58 @@ struct FotocopyShellView: View {
         guard workspace != .importPhotos else { return }
         workspace = .importPhotos
         sidebarSelection = nil
+    }
+}
+
+/// A fixed-width control keeps Full, Compact, and Minimal visually balanced
+/// in the toolbar. The native segmented picker widened and redistributed its
+/// labels depending on toolbar space, which made the review controls feel
+/// unstable beside the drive status.
+private struct CullReviewLayoutToolbarControl: View {
+    @Binding var layout: CullReviewLayout
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Text("View")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 0) {
+                ForEach(Array(CullReviewLayout.allCases.enumerated()), id: \.element.id) { index, candidate in
+                    Button {
+                        layout = candidate
+                    } label: {
+                        Text(candidate.title)
+                            .font(.caption.weight(candidate == layout ? .semibold : .regular))
+                            .frame(width: 64, height: 28)
+                            .contentShape(Rectangle())
+                            .background {
+                                if candidate == layout {
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .fill(.tertiary)
+                                        .padding(2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(candidate.title) review layout")
+                    .accessibilityAddTraits(candidate == layout ? .isSelected : [])
+
+                    if index < CullReviewLayout.allCases.count - 1 {
+                        Rectangle()
+                            .fill(.separator.opacity(0.6))
+                            .frame(width: 1, height: 16)
+                    }
+                }
+            }
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(.separator.opacity(0.55), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .help("Choose how much surrounding UI is shown while reviewing bursts")
+        }
     }
 }
 
