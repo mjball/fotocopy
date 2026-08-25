@@ -349,7 +349,8 @@ private struct BurstReviewView: View {
             }
             .disabled(model.isMoving)
 
-            ScrollView(.horizontal) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(burst.frames) { frame in
                         Button {
@@ -386,9 +387,14 @@ private struct BurstReviewView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(frame.filename)
+                        .id(frame.url)
                     }
                 }
                 .padding(.bottom, 4)
+                }
+                .task(id: model.selectedFrameURL) {
+                    await scrollSelectedFrame(model.selectedFrameURL, using: proxy)
+                }
             }
 
             if let inspectionSource = model.inspectionSource {
@@ -671,7 +677,8 @@ private struct BurstReviewView: View {
     }
 
     private var compactFilmstrip: some View {
-        ScrollView(.horizontal) {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
             HStack(spacing: 9) {
                 ForEach(burst.frames) { frame in
                     Button {
@@ -699,12 +706,29 @@ private struct BurstReviewView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(frame.filename)
+                    .id(frame.url)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 16)
+            }
+            .task(id: model.selectedFrameURL) {
+                await scrollSelectedFrame(model.selectedFrameURL, using: proxy)
+            }
         }
         .frame(height: 76)
+    }
+
+    /// Wait one SwiftUI update so the selected card has entered the horizontal
+    /// layout, then center it. The task is keyed to the selection, so fast
+    /// arrow navigation cancels an obsolete request instead of scrolling back.
+    private func scrollSelectedFrame(_ frameURL: URL?, using proxy: ScrollViewProxy) async {
+        guard let frameURL else { return }
+        await Task.yield()
+        guard !Task.isCancelled, model.selectedFrameURL == frameURL else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            proxy.scrollTo(frameURL, anchor: .center)
+        }
     }
 
     private func resizePreview(by translation: CGFloat) {
@@ -1169,7 +1193,8 @@ private struct CullInspectionCropSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            ScrollView(.horizontal) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 10) {
                     ForEach(burst.frames) { frame in
                         Button {
@@ -1195,9 +1220,14 @@ private struct CullInspectionCropSection: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Inspection crop for \(frame.filename)")
+                        .id(frame.url)
                     }
                 }
                 .padding(.bottom, 4)
+                }
+                .task(id: model.selectedFrameURL) {
+                    await scrollSelectedFrame(model.selectedFrameURL, using: proxy)
+                }
             }
 
             Label(
@@ -1216,6 +1246,18 @@ private struct CullInspectionCropSection: View {
     private func captureLabel(_ frame: CullPhoto) -> String {
         guard let date = frame.captureDate else { return "No capture time" }
         return date.formatted(date: .omitted, time: .standard)
+    }
+
+    /// Match the Frames filmstrip whenever keyboard navigation changes the
+    /// selected frame. Yielding lets the lazy crop card join the scroll view
+    /// before scrolling to it.
+    private func scrollSelectedFrame(_ frameURL: URL?, using proxy: ScrollViewProxy) async {
+        guard let frameURL else { return }
+        await Task.yield()
+        guard !Task.isCancelled, model.selectedFrameURL == frameURL else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            proxy.scrollTo(frameURL, anchor: .center)
+        }
     }
 
     private var cropDescription: String {

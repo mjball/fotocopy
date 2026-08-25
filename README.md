@@ -18,7 +18,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 ### Cull Canon CR3 bursts quickly
 
 - Scans a chosen date folder and its `Keeps`/`Rejects` subfolders to rebuild conservative consecutive-capture bursts from the files on disk.
-- Displays fast embedded JPEG previews, with full-resolution preview loading when you zoom; pinch, double-click, and pan directly in the main viewer.
+- Displays fast embedded JPEG previews, with full-resolution preview loading when you zoom; pinch, double-click, and pan directly in the main viewer. The Frames filmstrip and active detail-crop strip follow the selected frame during keyboard navigation.
 - Offers Full, Compact, and Minimal review layouts, plus a filmstrip, per-frame Keep/Reject badges, and filesystem-derived burst status: no icon before a decision, an outlined green check after a keep or outlined red X after rejects only while review is in progress, then a filled green check when the finished burst has a keeper or a filled red X when every frame is rejected.
 - Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point.
 - Provides keyboard-driven review: arrow keys navigate frames and bursts; `K`/`X` keep or reject the current frame; `⇧K` keeps the current frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
