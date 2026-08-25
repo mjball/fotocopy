@@ -96,7 +96,7 @@ import Testing
     #expect(!scan.bursts[0].isReviewed)
 }
 
-@Test func burstReviewOutcomeRequiresEveryFrameAndDistinguishesCompletedStates() {
+@Test func burstDecisionStatusShowsProgressAndFinishedResult() {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let kept = CullPhoto(
         url: URL(fileURLWithPath: "/tmp/BL5A1001.CR3"),
@@ -139,11 +139,15 @@ import Testing
         disposition: .reject
     )
 
-    #expect(PhotoBurst(frames: [kept, anotherKept]).reviewOutcome == .allKept)
-    #expect(PhotoBurst(frames: [kept, rejected]).reviewOutcome == .mixed)
-    #expect(PhotoBurst(frames: [rejected, anotherRejected]).reviewOutcome == .allRejected)
-    #expect(PhotoBurst(frames: [kept, rejected, unmarked]).reviewOutcome == nil)
+    #expect(PhotoBurst(frames: [unmarked]).decisionStatus == nil)
+    #expect(PhotoBurst(frames: [rejected, unmarked]).decisionStatus == .rejectingInProgress)
+    #expect(PhotoBurst(frames: [kept, unmarked]).decisionStatus == .keepingInProgress)
+    #expect(PhotoBurst(frames: [kept, rejected, unmarked]).decisionStatus == .keepingInProgress)
+    #expect(PhotoBurst(frames: [kept, anotherKept]).decisionStatus == .kept)
+    #expect(PhotoBurst(frames: [kept, rejected]).decisionStatus == .kept)
+    #expect(PhotoBurst(frames: [rejected, anotherRejected]).decisionStatus == .rejected)
     #expect(!PhotoBurst(frames: [kept, rejected, unmarked]).isReviewed)
+    #expect(PhotoBurst(frames: [kept, rejected]).isReviewed)
 }
 
 @Test func inspectionPointUsesOnlyTheVisibleAspectFitImage() {

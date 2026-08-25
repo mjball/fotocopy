@@ -139,29 +139,28 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
     var id: URL { frames[0].url }
     var firstFrame: CullPhoto { frames[0] }
 
-    /// A completed burst communicates its outcome in the sidebar. An unmarked
-    /// frame deliberately produces no outcome, so a missing icon means there
-    /// is still a decision to make.
-    var reviewOutcome: BurstReviewOutcome? {
-        guard !frames.isEmpty,
-              frames.allSatisfy({ $0.disposition != nil }) else {
-            return nil
-        }
+    /// The sidebar status intentionally answers two fast culling questions:
+    /// whether this burst has produced a keeper, and whether any frame still
+    /// needs a decision. It is derived from the frames' on-disk locations.
+    var decisionStatus: BurstDecisionStatus? {
+        guard !frames.isEmpty else { return nil }
 
-        if frames.allSatisfy({ $0.disposition == .select }) {
-            return .allKept
+        let hasKeep = frames.contains { $0.disposition == .select }
+        let hasReject = frames.contains { $0.disposition == .reject }
+        let hasUndecided = frames.contains { $0.disposition == nil }
+
+        guard hasKeep || hasReject else { return nil }
+        if hasUndecided {
+            return hasKeep ? .keepingInProgress : .rejectingInProgress
         }
-        if frames.allSatisfy({ $0.disposition == .reject }) {
-            return .allRejected
-        }
-        return .mixed
+        return hasKeep ? .kept : .rejected
     }
 
     /// A burst is reviewed only when every frame has an explicit, on-disk
-    /// decision. The outcome remains filesystem-derived and is never stored
+    /// decision. The status remains filesystem-derived and is never stored
     /// separately from the individual Keep/Reject moves.
     var isReviewed: Bool {
-        reviewOutcome != nil
+        decisionStatus?.isComplete == true
     }
 
     var title: String {
@@ -176,13 +175,23 @@ struct PhotoBurst: Identifiable, Sendable, Hashable {
     }
 }
 
-/// The three meaningful completed-burst states. A partial burst has no value
-/// because the sidebar intentionally shows no status icon until every frame
-/// has been kept or rejected.
-enum BurstReviewOutcome: Equatable, Sendable {
-    case allKept
-    case mixed
-    case allRejected
+/// Sidebar status for a burst with at least one culling decision. An outlined
+/// glyph means further decisions remain; a filled glyph means review is
+/// complete. Green has priority whenever at least one frame is kept.
+enum BurstDecisionStatus: Equatable, Sendable {
+    case keepingInProgress
+    case rejectingInProgress
+    case kept
+    case rejected
+
+    var isComplete: Bool {
+        switch self {
+        case .keepingInProgress, .rejectingInProgress:
+            false
+        case .kept, .rejected:
+            true
+        }
+    }
 }
 
 /// The arrow-key policy for a single burst. Navigation stops at either end so

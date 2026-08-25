@@ -105,8 +105,8 @@ struct CullSidebarSections: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
-                            if let outcome = burst.reviewOutcome {
-                                BurstReviewOutcomeIcon(outcome: outcome)
+                            if let status = burst.decisionStatus {
+                                BurstDecisionStatusIcon(status: status)
                             }
                         }
                         .tag(FotocopySidebarDestination.burst(burst.id))
@@ -194,39 +194,43 @@ struct CullSidebarSections: View {
     }
 }
 
-/// Status is deliberately absent until every frame is decided. Once complete,
-/// the fill and glyph distinguish "all kept", a productive mixed cull, and an
-/// all-rejected burst without requiring the photographer to open it again.
-private struct BurstReviewOutcomeIcon: View {
-    let outcome: BurstReviewOutcome
+/// An outline means a burst still has undecided frames; a filled glyph means
+/// the burst is complete. The green check wins once a burst has a keeper, so
+/// the sidebar stays legible without showing multiple status icons per row.
+private struct BurstDecisionStatusIcon: View {
+    let status: BurstDecisionStatus
 
     private var systemImage: String {
-        switch outcome {
-        case .allKept:
-            "checkmark.circle.fill"
-        case .mixed:
+        switch status {
+        case .keepingInProgress:
             "checkmark.circle"
-        case .allRejected:
+        case .rejectingInProgress:
+            "xmark.circle"
+        case .kept:
+            "checkmark.circle.fill"
+        case .rejected:
             "xmark.circle.fill"
         }
     }
 
     private var color: Color {
-        switch outcome {
-        case .allKept, .mixed:
+        switch status {
+        case .keepingInProgress, .kept:
             .green
-        case .allRejected:
+        case .rejectingInProgress, .rejected:
             .red
         }
     }
 
     private var accessibilityDescription: String {
-        switch outcome {
-        case .allKept:
-            "Reviewed: every frame kept"
-        case .mixed:
-            "Reviewed: some frames kept and some rejected"
-        case .allRejected:
+        switch status {
+        case .keepingInProgress:
+            "In progress: at least one frame kept"
+        case .rejectingInProgress:
+            "In progress: frames rejected, no frame kept yet"
+        case .kept:
+            "Reviewed: at least one frame kept"
+        case .rejected:
             "Reviewed: every frame rejected"
         }
     }
