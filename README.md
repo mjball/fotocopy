@@ -60,11 +60,15 @@ Requires macOS 14+ and Swift 5.9+.
 swift build
 ```
 
-To build a release `.app` bundle:
+To verify a release build without retaining an extra `.app` bundle:
 
 ```
 ./Scripts/build-release.sh
 ```
+
+The bundle and ZIP are staged only in a temporary directory and removed when
+the script finishes. `/Applications/Fotocopy.app` is the authoritative local
+installation; use the install instructions above after publishing a release.
 
 ## Releasing
 
@@ -74,7 +78,7 @@ Requires [GitHub CLI](https://cli.github.com/) authenticated with repo access.
 ./Scripts/build-release.sh --release v1.0
 ```
 
-This builds the app, generates the icon from `Resources/AppIcon.png`, stamps the version into the bundle, code-signs, zips, and creates a GitHub release with the zip and install script attached.
+This builds the app, generates the icon from `Resources/AppIcon.png`, stages and signs the bundle, then uploads the ZIP and install script to GitHub. The temporary release artifacts are removed when the command finishes, leaving `/Applications/Fotocopy.app` as the only retained app bundle.
 
 ## Running tests
 
