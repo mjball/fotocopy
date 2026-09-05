@@ -54,6 +54,82 @@ struct LibraryDecisionEngineTests {
         #expect(scan.decisions.allSatisfy { $0.dateLabel == "2026/08/22" })
     }
 
+    @Test func imageStatisticsCoverEveryDateFolderAndIgnoreSidecarsAndVideos() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let firstDay = root.appendingPathComponent("2026/08/22")
+        let secondDay = root.appendingPathComponent("2026/09/01")
+        let rejected = firstDay.appendingPathComponent("Rejects")
+        let raw = rejected.appendingPathComponent("BL5A0002.CR3")
+        try createFile(firstDay.appendingPathComponent("IMG_0001.JPG"), size: 100)
+        try createFile(firstDay.appendingPathComponent("CLIP_0001.MOV"), size: 900)
+        try createFile(firstDay.appendingPathComponent(".hidden.NEF"), size: 800)
+        try createFile(firstDay.appendingPathComponent("nested/NOT_DIRECT.ARW"), size: 700)
+        try createFile(firstDay.appendingPathComponent("Keeps/IMG_0002.HEIC"), size: 200)
+        try createFile(raw, size: 300)
+        try createFile(raw.deletingPathExtension().appendingPathExtension("xmp"), size: 30)
+        try createFile(secondDay.appendingPathComponent("IMG_0003.NEF"), size: 400)
+        try createFile(secondDay.appendingPathComponent("Keeps/IMG_0004.JPEG"), size: 500)
+        try FileManager.default.createSymbolicLink(
+            at: secondDay.appendingPathComponent("linked.DNG"),
+            withDestinationURL: firstDay.appendingPathComponent("IMG_0001.JPG")
+        )
+
+        let scan = try LibraryDecisionEngine.scan(libraryRootURL: root)
+        let statistics = scan.imageStatistics
+
+        #expect(statistics.unrated == LibraryImageStatisticsBucket(imageCount: 2, byteCount: 500))
+        #expect(statistics.kept == LibraryImageStatisticsBucket(imageCount: 2, byteCount: 700))
+        #expect(statistics.rejected == LibraryImageStatisticsBucket(imageCount: 1, byteCount: 300))
+        #expect(statistics.totalImageCount == 5)
+        #expect(statistics.totalByteCount == 1_500)
+        #expect(statistics.percentage(for: .unrated) == 40)
+        #expect(statistics.percentage(for: .kept) == 40)
+        #expect(statistics.percentage(for: .rejected) == 20)
+        #expect(scan.decisions.count == 1)
+        #expect(scan.totalBytes == 330)
+    }
+
+    @Test func imageStatisticsApplyCullRelocationsWithoutRescanning() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let day = root.appendingPathComponent("2026/08/22")
+        let raw = day.appendingPathComponent("BL5A0001.CR3")
+        try createFile(raw, size: 250)
+        let before = try LibraryDecisionEngine.scanImageStatistics(libraryRootURL: root)
+
+        let keptURL = day.appendingPathComponent("Keeps/BL5A0001.CR3")
+        let selectPlan = try CullApplyEngine.makePlan(
+            folderURL: day,
+            rawRelocations: [CullFrameRelocation(sourceURL: raw, destinationURL: keptURL)]
+        )
+        let selectResult = try CullApplyEngine.apply(selectPlan)
+        let afterKeep = before.applying(
+            rawRelocations: selectResult.rawRelocations,
+            rawFileByteCounts: selectResult.rawFileByteCounts,
+            in: day
+        )
+
+        #expect(afterKeep?.unrated == .empty)
+        #expect(afterKeep?.kept == LibraryImageStatisticsBucket(imageCount: 1, byteCount: 250))
+        #expect(afterKeep?.totalByteCount == before.totalByteCount)
+
+        let restorePlan = try CullApplyEngine.makePlan(
+            folderURL: day,
+            rawRelocations: [CullFrameRelocation(sourceURL: keptURL, destinationURL: raw)]
+        )
+        let restoreResult = try CullApplyEngine.apply(restorePlan)
+        let afterUndo = afterKeep?.applying(
+            rawRelocations: restoreResult.rawRelocations,
+            rawFileByteCounts: restoreResult.rawFileByteCounts,
+            in: day
+        )
+
+        #expect(afterUndo == before)
+    }
+
     @Test func libraryRootUsesFotocopyChildWhenImportDestinationIsAVolume() throws {
         let volumeRoot = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: volumeRoot) }

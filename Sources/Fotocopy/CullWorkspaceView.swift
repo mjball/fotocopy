@@ -10,6 +10,7 @@ struct CullWorkspaceView: View {
         detail
         .task {
             model.resumeLastScanIfNeeded()
+            model.refreshLibraryImageStatisticsIfNeeded()
         }
         .alert("Could not scan folder", isPresented: $model.showError) {
             Button("OK", role: .cancel) { }
@@ -321,7 +322,7 @@ private struct BurstReviewView: View {
             if let selectedFrame {
                 HStack(alignment: .top, spacing: 18) {
                     mainPreview(for: selectedFrame, height: resolvedPreviewHeight)
-                    frameInspector(for: selectedFrame)
+                    frameInspector(for: selectedFrame, height: resolvedPreviewHeight)
                 }
             }
 
@@ -490,7 +491,7 @@ private struct BurstReviewView: View {
         }
     }
 
-    private func frameInspector(for frame: CullPhoto) -> some View {
+    private func frameInspector(for frame: CullPhoto, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(frame.filename)
                 .font(.headline)
@@ -559,8 +560,13 @@ private struct BurstReviewView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+
+            CullLibraryStatisticsInspector(model: model)
         }
         .frame(width: 230, alignment: .leading)
+        .frame(minHeight: height, maxHeight: height, alignment: .topLeading)
     }
 
     private var compactReviewContent: some View {
@@ -1497,6 +1503,9 @@ final class CullViewModel {
     var inspectionSource: CullInspectionSource?
     var isPickingInspectionPoint = false
     var libraryDecisionScan: CullLibraryDecisionScan?
+    var libraryImageStatistics: LibraryImageStatistics?
+    var isScanningLibraryImageStatistics = false
+    var libraryImageStatisticsError: String?
     var isScanningLibraryDecisions = false
     var libraryScanStatus = ""
     var libraryDecisionError: String?
@@ -1511,6 +1520,7 @@ final class CullViewModel {
     private var scanTask: Task<Void, Never>?
     private var folderNavigationTask: Task<Void, Never>?
     private var libraryScanTask: Task<Void, Never>?
+    private var libraryImageStatisticsTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
 
     init() {
@@ -1599,6 +1609,43 @@ final class CullViewModel {
     func showBurstCulling() {
         destination = .bursts
         resumeLastScanIfNeeded()
+        refreshLibraryImageStatisticsIfNeeded()
+    }
+
+    func refreshLibraryImageStatisticsIfNeeded() {
+        guard let libraryRoot = configuredLibraryURL else {
+            libraryImageStatistics = nil
+            libraryImageStatisticsError = nil
+            return
+        }
+        guard libraryImageStatistics?.libraryRootURL != libraryRoot else { return }
+        refreshLibraryImageStatistics()
+    }
+
+    func refreshLibraryImageStatistics() {
+        guard let libraryRoot = configuredLibraryURL,
+              !isScanningLibraryImageStatistics,
+              !isScanningLibraryDecisions,
+              !isTrashingLibraryRejects else { return }
+        libraryImageStatisticsTask?.cancel()
+        libraryImageStatisticsError = nil
+        isScanningLibraryImageStatistics = true
+        let model = self
+        libraryImageStatisticsTask = Task {
+            do {
+                let statistics = try await Task.detached(priority: .utility) {
+                    try LibraryDecisionEngine.scanImageStatistics(libraryRootURL: libraryRoot)
+                }.value
+                guard !Task.isCancelled else { return }
+                model.libraryImageStatistics = statistics
+            } catch is CancellationError {
+                // Replaced by a fuller Organize scan or a newer library scan.
+            } catch {
+                model.libraryImageStatisticsError = error.localizedDescription
+            }
+            model.isScanningLibraryImageStatistics = false
+            model.libraryImageStatisticsTask = nil
+        }
     }
 
     func refreshLibraryDecisionsIfNeeded() {
@@ -1616,6 +1663,8 @@ final class CullViewModel {
               !isScanningLibraryDecisions,
               !isTrashingLibraryRejects else { return }
         libraryScanTask?.cancel()
+        libraryImageStatisticsTask?.cancel()
+        isScanningLibraryImageStatistics = false
         libraryDecisionError = nil
         libraryTrashResult = nil
         isScanningLibraryDecisions = true
@@ -1628,6 +1677,8 @@ final class CullViewModel {
                 }.value
                 guard !Task.isCancelled else { return }
                 model.libraryDecisionScan = scan
+                model.libraryImageStatistics = scan.imageStatistics
+                model.libraryImageStatisticsError = nil
                 model.libraryScanStatus = "Found \(scan.decisions.count) decision\(scan.decisions.count == 1 ? "" : "s")"
             } catch is CancellationError {
                 // Replaced by a newer library scan.
@@ -1643,6 +1694,8 @@ final class CullViewModel {
         guard let libraryRoot = configuredLibraryURL,
               !isTrashingLibraryRejects,
               !isScanningLibraryDecisions else { return }
+        libraryImageStatisticsTask?.cancel()
+        isScanningLibraryImageStatistics = false
         libraryDecisionError = nil
         isScanningLibraryDecisions = true
         libraryScanStatus = "Rechecking Rejects before Trash…"
@@ -1655,6 +1708,8 @@ final class CullViewModel {
                 let plan = try LibraryDecisionEngine.makeTrashPlan(from: scan)
                 guard !Task.isCancelled else { return }
                 model.libraryDecisionScan = scan
+                model.libraryImageStatistics = scan.imageStatistics
+                model.libraryImageStatisticsError = nil
                 model.pendingLibraryTrashPlan = plan
                 model.libraryScanStatus = "Rejects rechecked"
             } catch is CancellationError {
@@ -1687,6 +1742,8 @@ final class CullViewModel {
                     try LibraryDecisionEngine.scan(libraryRootURL: plan.libraryRootURL)
                 }.value
                 model.libraryDecisionScan = refreshed
+                model.libraryImageStatistics = refreshed.imageStatistics
+                model.libraryImageStatisticsError = nil
             } catch {
                 model.libraryDecisionError = "Files may have moved, but Library Decisions could not refresh: \(error.localizedDescription)"
             }
@@ -1716,6 +1773,7 @@ final class CullViewModel {
     }
 
     func scan() {
+        refreshLibraryImageStatistics()
         startScan()
     }
 
@@ -2125,6 +2183,7 @@ final class CullViewModel {
                 guard !Task.isCancelled, let self else { return }
                 self.rewriteFrameURLs(using: result.rawRelocations)
                 self.applyDispositionStates(changedStates, after: result.rawRelocations)
+                self.applyLibraryImageStatistics(after: result, in: folderURL)
                 if let nextFrameURL {
                     let destinationBySource = Dictionary(
                         uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
@@ -2224,6 +2283,24 @@ final class CullViewModel {
                 dispositions.removeValue(forKey: currentURL)
             }
         }
+    }
+
+    private func applyLibraryImageStatistics(after result: CullApplyResult, in folderURL: URL) {
+        guard let statistics = libraryImageStatistics,
+              let libraryRoot = configuredLibraryURL,
+              statistics.libraryRootURL == libraryRoot,
+              LibraryDecisionEngine.isRecognizedDateFolder(folderURL, beneath: libraryRoot) else {
+            return
+        }
+        guard let updated = statistics.applying(
+            rawRelocations: result.rawRelocations,
+            rawFileByteCounts: result.rawFileByteCounts,
+            in: folderURL
+        ) else {
+            refreshLibraryImageStatistics()
+            return
+        }
+        libraryImageStatistics = updated
     }
 
     private func rewriteFrameURLs(using relocations: [CullFrameRelocation]) {

@@ -172,11 +172,9 @@ struct DestinationManifest {
     static let photosLibraryBucket = "photos-library"
     static let rootBucket = "root"
 
-    private static let supportedExtensions: Set<String> = [
-        "jpg", "jpeg", "heic", "heif",
-        "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2",
+    private static let supportedExtensions = LibraryDecisionEngine.supportedStillImageExtensions.union([
         "mov", "mp4", "m4v"
-    ]
+    ])
 
     let destinationURL: URL
 
