@@ -110,6 +110,7 @@ struct CullSidebarSections: View {
                             }
                         }
                         .tag(FotocopySidebarDestination.burst(burst.id))
+                        .id(burst.id)
                     }
                 }
             }

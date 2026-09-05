@@ -130,31 +130,36 @@ struct FotocopyShellView: View {
     }
 
     private var workspaceSidebar: some View {
-        List(selection: $sidebarSelection) {
-            Section("Tasks") {
-                TaskSidebarRow(
-                    task: .importPhotos,
-                    isActive: workspace == .importPhotos,
-                    action: activateImport
-                )
-                TaskSidebarRow(
-                    task: .cullBursts,
-                    isActive: workspace == .cullBursts,
-                    action: activateCull
-                )
-                TaskSidebarRow(
-                    task: .organize,
-                    isActive: workspace == .organize,
-                    action: activateOrganize
-                )
-            }
+        ScrollViewReader { proxy in
+            List(selection: $sidebarSelection) {
+                Section("Tasks") {
+                    TaskSidebarRow(
+                        task: .importPhotos,
+                        isActive: workspace == .importPhotos,
+                        action: activateImport
+                    )
+                    TaskSidebarRow(
+                        task: .cullBursts,
+                        isActive: workspace == .cullBursts,
+                        action: activateCull
+                    )
+                    TaskSidebarRow(
+                        task: .organize,
+                        isActive: workspace == .organize,
+                        action: activateOrganize
+                    )
+                }
 
-            if workspace == .cullBursts {
-                CullSidebarSections(model: cullModel)
+                if workspace == .cullBursts {
+                    CullSidebarSections(model: cullModel)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 210, ideal: 255, max: 340)
+            .task(id: cullModel.selectedBurstID) {
+                await scrollSelectedBurstIntoView(cullModel.selectedBurstID, using: proxy)
             }
         }
-        .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 210, ideal: 255, max: 340)
     }
 
     @ViewBuilder
@@ -190,6 +195,17 @@ struct FotocopyShellView: View {
             }
         }
         sidebarSelection = nil
+    }
+
+    /// Mirror vertical keyboard navigation in the sidebar so the selected
+    /// burst remains visible while photographers review a long shoot.
+    private func scrollSelectedBurstIntoView(_ burstID: URL?, using proxy: ScrollViewProxy) async {
+        guard let burstID, workspace == .cullBursts else { return }
+        await Task.yield()
+        guard !Task.isCancelled, cullModel.selectedBurstID == burstID else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            proxy.scrollTo(burstID, anchor: .center)
+        }
     }
 
     private var currentCullSidebarDestination: FotocopySidebarDestination? {
