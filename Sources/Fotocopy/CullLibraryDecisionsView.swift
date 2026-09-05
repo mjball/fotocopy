@@ -53,6 +53,7 @@ struct CullLibraryDecisionsView: View {
         }
         .task {
             model.refreshLibraryDecisionsIfNeeded()
+            model.refreshLibraryImageStatisticsIfNeeded()
         }
         .onChange(of: configuredLibraryPath) { _, _ in
             model.refreshLibraryDecisions()
@@ -170,16 +171,17 @@ struct CullLibraryDecisionsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .help(scan.libraryRootURL.path)
-            HStack(spacing: 10) {
-                Label("\(scan.decisions.count) decisions", systemImage: "checkmark.circle")
-                Label("\(scan.keptCount) kept", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Label("\(scan.rejectedCount) rejected", systemImage: "xmark.circle.fill")
-                    .foregroundStyle(.red)
-                Text(ByteCountFormatter.string(fromByteCount: Int64(scan.totalBytes), countStyle: .file))
-                    .foregroundStyle(.secondary)
+            if let statistics = model.libraryImageStatistics {
+                LibraryImageStatisticsHeader(statistics: statistics)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Reading whole library…")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.subheadline)
             }
-            .font(.subheadline)
         }
     }
 

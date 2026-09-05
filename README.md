@@ -23,11 +23,13 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point. When a selected frame records an active target, Fotocopy automatically activates the matching crop comparison while preserving a manual point if you chose one.
 - Provides keyboard-driven review: arrow keys navigate frames and bursts, keeping the selected burst visible in the sidebar; `⌘[`/`⌘]` move to the previous or next date folder with CR3s; `K`/`X` keep or reject the current frame; `⇧K` keeps the current frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
 - Applies choices immediately by moving the CR3 and its paired XMP/ON1 sidecars into `Keeps` or `Rejects`. The latest move can be undone, and a later scan or relaunch restores the decision badges from the folder structure.
+- Shows a live, whole-library summary in the Full-layout inspector: image count and storage split between unrated, kept, and rejected photos. Keep, Reject, and Undo update the summary immediately; **Rescan** refreshes it after external Finder changes.
 
 ### Review and clean up a whole library
 
-- The Organize task scans the configured import destination for `YYYY/MM/DD/Keeps` and `Rejects` folders—there is no separate catalog to maintain.
+- The Organize task scans every recognized `YYYY/MM/DD/` folder in the configured import destination—there is no separate catalog to maintain. Its header summarizes total image count and storage, split between unrated, kept, and rejected photos.
 - Browse kept and rejected photos in a date-grouped thumbnail grid; filter by decision, date, or filename; reveal a photo in Finder or reopen its day in Cull.
+- Library totals count supported still-image files only. Videos and XMP/ON1 sidecars are intentionally excluded from both the count and storage total.
 - Recheck and move all rejected photo packages to Finder’s Trash in one confirmed action. Fotocopy never permanently deletes them; restore through Finder’s Trash if needed.
 
 ### Native macOS workflow

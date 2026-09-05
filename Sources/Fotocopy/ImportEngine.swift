@@ -118,11 +118,9 @@ struct PreviewResult: Sendable {
 }
 
 actor ImportEngine {
-    private static let supportedExtensions: Set<String> = [
-        "jpg", "jpeg", "heic", "heif",
-        "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2",
+    private static let supportedExtensions = LibraryDecisionEngine.supportedStillImageExtensions.union([
         "mov", "mp4", "m4v"
-    ]
+    ])
 
     private static let skippedDirectories: Set<String> = [
         "Cache", "Thumbnails", "resources", "Derivatives"

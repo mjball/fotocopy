@@ -47,6 +47,7 @@ struct CullApplyPlan: Sendable {
     fileprivate let manifestRootURL: URL?
     fileprivate let manifestRelocations: [DestinationManifestRelocation]
     fileprivate let rawRelocations: [CullFrameRelocation]
+    fileprivate let rawFileByteCounts: [URL: Int]
 
     var markedFrameCount: Int { selectCount + rejectCount }
 }
@@ -56,6 +57,7 @@ struct CullApplyResult: Sendable, Equatable {
     let rejectCount: Int
     let companionFileCount: Int
     let rawRelocations: [CullFrameRelocation]
+    let rawFileByteCounts: [URL: Int]
 
     var markedFrameCount: Int { selectCount + rejectCount }
 }
@@ -165,7 +167,8 @@ enum CullApplyEngine {
             selectCount: plan.selectCount,
             rejectCount: plan.rejectCount,
             companionFileCount: plan.companionFileCount,
-            rawRelocations: plan.rawRelocations
+            rawRelocations: plan.rawRelocations,
+            rawFileByteCounts: plan.rawFileByteCounts
         )
     }
 
@@ -187,6 +190,7 @@ enum CullApplyEngine {
         var fileMoves: [CullApplyFileMove] = []
         var manifestRelocations: [DestinationManifestRelocation] = []
         var normalizedRawRelocations: [CullFrameRelocation] = []
+        var rawFileByteCounts: [URL: Int] = [:]
         var seenDestinationPaths: Set<String> = []
         var companionFileCount = 0
 
@@ -201,6 +205,7 @@ enum CullApplyEngine {
             guard fm.fileExists(atPath: sourceURL.path) else {
                 throw CullApplyError.sourceUnavailable(sourceURL)
             }
+            let rawByteCount = try fileSize(of: sourceURL, fileManager: fm)
 
             try appendMove(
                 from: sourceURL,
@@ -212,18 +217,18 @@ enum CullApplyEngine {
             normalizedRawRelocations.append(
                 CullFrameRelocation(sourceURL: sourceURL, destinationURL: destinationURL)
             )
+            rawFileByteCounts[sourceURL] = rawByteCount
 
             if let manifestRootURL {
                 guard let previousRelativePath = relativePath(of: sourceURL, within: manifestRootURL),
                       let currentRelativePath = relativePath(of: destinationURL, within: manifestRootURL) else {
                     throw CullApplyError.sourceOutsideReviewFolder(sourceURL)
                 }
-                let size = try fileSize(of: sourceURL, fileManager: fm)
                 manifestRelocations.append(
                     DestinationManifestRelocation(
                         previousRelativePath: previousRelativePath,
                         currentRelativePath: currentRelativePath,
-                        destinationSize: size
+                        destinationSize: rawByteCount
                     )
                 )
             }
@@ -256,7 +261,8 @@ enum CullApplyEngine {
             fileMoves: fileMoves,
             manifestRootURL: manifestRootURL,
             manifestRelocations: manifestRelocations,
-            rawRelocations: normalizedRawRelocations
+            rawRelocations: normalizedRawRelocations,
+            rawFileByteCounts: rawFileByteCounts
         )
     }
 

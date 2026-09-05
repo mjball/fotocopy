@@ -97,7 +97,7 @@ struct FotocopyShellView: View {
                             .controlSize(.small)
                             .buttonStyle(.bordered)
                             .disabled(cullModel.isMoving)
-                            .help("Scan this folder again for bursts")
+                            .help("Scan this folder again for bursts and refresh the whole-library summary")
                         }
                     }
                 }

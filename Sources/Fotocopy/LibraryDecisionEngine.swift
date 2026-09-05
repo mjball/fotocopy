@@ -18,11 +18,116 @@ struct CullLibraryDecision: Identifiable, Sendable, Hashable {
 struct CullLibraryDecisionScan: Sendable {
     let libraryRootURL: URL
     let decisions: [CullLibraryDecision]
+    let imageStatistics: LibraryImageStatistics
     let scannedAt: Date
 
     var totalBytes: Int { decisions.reduce(0) { $0 + $1.byteCount } }
     var keptCount: Int { decisions.count { $0.disposition == .select } }
     var rejectedCount: Int { decisions.count { $0.disposition == .reject } }
+}
+
+/// The whole-library state behind the progress summaries. It deliberately
+/// counts only primary still-image files: decision sidecars are operational
+/// companions, not photographs, and video files are outside Cull's scope.
+enum LibraryImageReviewState: CaseIterable, Sendable, Hashable {
+    case unrated
+    case kept
+    case rejected
+
+    var title: String {
+        switch self {
+        case .unrated: return "Unrated"
+        case .kept: return "Kept"
+        case .rejected: return "Rejected"
+        }
+    }
+}
+
+struct LibraryImageStatisticsBucket: Sendable, Equatable {
+    let imageCount: Int
+    let byteCount: Int
+
+    static let empty = Self(imageCount: 0, byteCount: 0)
+}
+
+struct LibraryImageStatistics: Sendable, Equatable {
+    let libraryRootURL: URL
+    let unrated: LibraryImageStatisticsBucket
+    let kept: LibraryImageStatisticsBucket
+    let rejected: LibraryImageStatisticsBucket
+    let scannedAt: Date
+
+    var totalImageCount: Int { unrated.imageCount + kept.imageCount + rejected.imageCount }
+    var totalByteCount: Int { unrated.byteCount + kept.byteCount + rejected.byteCount }
+
+    func percentage(for state: LibraryImageReviewState) -> Int {
+        guard totalImageCount > 0 else { return 0 }
+        return Int((Double(bucket(for: state).imageCount) / Double(totalImageCount) * 100).rounded())
+    }
+
+    func bucket(for state: LibraryImageReviewState) -> LibraryImageStatisticsBucket {
+        switch state {
+        case .unrated: return unrated
+        case .kept: return kept
+        case .rejected: return rejected
+        }
+    }
+
+    /// Cull moves preserve a primary image's bytes, so a successful move can
+    /// update the visible buckets immediately instead of rereading the entire
+    /// external library after every Keep, Reject, or Undo.
+    func applying(
+        rawRelocations: [CullFrameRelocation],
+        rawFileByteCounts: [URL: Int],
+        in dateFolderURL: URL
+    ) -> Self? {
+        var buckets = Dictionary(uniqueKeysWithValues: LibraryImageReviewState.allCases.map {
+            ($0, bucket(for: $0))
+        })
+
+        for relocation in rawRelocations {
+            guard let sourceState = Self.reviewState(of: relocation.sourceURL, in: dateFolderURL),
+                  let destinationState = Self.reviewState(of: relocation.destinationURL, in: dateFolderURL),
+                  let byteCount = rawFileByteCounts[relocation.sourceURL.standardizedFileURL] else {
+                return nil
+            }
+            guard sourceState != destinationState,
+                  let sourceBucket = buckets[sourceState],
+                  let destinationBucket = buckets[destinationState],
+                  sourceBucket.imageCount > 0,
+                  sourceBucket.byteCount >= byteCount else {
+                return nil
+            }
+            buckets[sourceState] = LibraryImageStatisticsBucket(
+                imageCount: sourceBucket.imageCount - 1,
+                byteCount: sourceBucket.byteCount - byteCount
+            )
+            buckets[destinationState] = LibraryImageStatisticsBucket(
+                imageCount: destinationBucket.imageCount + 1,
+                byteCount: destinationBucket.byteCount + byteCount
+            )
+        }
+
+        return Self(
+            libraryRootURL: libraryRootURL,
+            unrated: buckets[.unrated] ?? .empty,
+            kept: buckets[.kept] ?? .empty,
+            rejected: buckets[.rejected] ?? .empty,
+            scannedAt: scannedAt
+        )
+    }
+
+    private static func reviewState(of fileURL: URL, in dateFolderURL: URL) -> LibraryImageReviewState? {
+        let parent = fileURL.deletingLastPathComponent().standardizedFileURL
+        let dateFolder = dateFolderURL.standardizedFileURL
+        if parent == dateFolder { return .unrated }
+        guard parent.deletingLastPathComponent().standardizedFileURL == dateFolder else { return nil }
+        switch parent.lastPathComponent {
+        case CullDisposition.select.destinationFolderName: return .kept
+        case CullDisposition.reject.destinationFolderName: return .rejected
+        default: return nil
+        }
+    }
 }
 
 enum CullLibraryDecisionFilter: String, CaseIterable, Identifiable {
@@ -94,9 +199,17 @@ enum CullLibraryDecisionError: LocalizedError {
     }
 }
 
-/// Discovers only Fotocopy's YYYY/MM/DD/{Keeps,Rejects} decision folders.
-/// It never follows symlinks or treats arbitrary folders as cull decisions.
+/// Discovers Fotocopy's YYYY/MM/DD image hierarchy without following symlinks
+/// or treating arbitrary folders as library photos or cull decisions.
 enum LibraryDecisionEngine {
+    /// The still-image types Fotocopy imports and can report in library
+    /// progress. Videos remain importable but are intentionally excluded from
+    /// culling statistics.
+    static let supportedStillImageExtensions: Set<String> = [
+        "jpg", "jpeg", "heic", "heif",
+        "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2"
+    ]
+
     /// Import may be pointed at a volume while the existing Fotocopy library
     /// lives in its conventional `Fotocopy` child. Prefer the selected folder
     /// when it already looks like a library; otherwise adopt that child only
@@ -120,15 +233,32 @@ enum LibraryDecisionEngine {
         }
 
         var decisions: [CullLibraryDecision] = []
+        var imageBuckets = Dictionary(uniqueKeysWithValues: LibraryImageReviewState.allCases.map {
+            ($0, LibraryImageStatisticsBucket.empty)
+        })
         for yearURL in childDirectories(of: root, fileManager: fileManager) where isYear(yearURL.lastPathComponent) {
             for monthURL in childDirectories(of: yearURL, fileManager: fileManager) where isMonth(monthURL.lastPathComponent) {
                 for dayURL in childDirectories(of: monthURL, fileManager: fileManager) where isDay(dayURL.lastPathComponent, year: yearURL.lastPathComponent, month: monthURL.lastPathComponent) {
                     let dateLabel = "\(yearURL.lastPathComponent)/\(monthURL.lastPathComponent)/\(dayURL.lastPathComponent)"
+                    addImageFiles(
+                        directImageFiles(in: dayURL, fileManager: fileManager),
+                        to: .unrated,
+                        buckets: &imageBuckets,
+                        fileManager: fileManager
+                    )
                     for disposition in CullDisposition.allCases {
                         let decisionFolder = dayURL.appendingPathComponent(disposition.destinationFolderName, isDirectory: true)
                         guard isSafeDirectory(decisionFolder, fileManager: fileManager) else { continue }
 
-                        for rawURL in directCR3Files(in: decisionFolder, fileManager: fileManager) {
+                        let imageFiles = directImageFiles(in: decisionFolder, fileManager: fileManager)
+                        addImageFiles(
+                            imageFiles,
+                            to: disposition == .select ? .kept : .rejected,
+                            buckets: &imageBuckets,
+                            fileManager: fileManager
+                        )
+
+                        for rawURL in imageFiles where rawURL.pathExtension.caseInsensitiveCompare("cr3") == .orderedSame {
                             let companions = CullApplyEngine.companionURLs(for: rawURL, fileManager: fileManager)
                                 .filter { isSafePlainFile($0, in: decisionFolder, fileManager: fileManager) }
                             let bytes = fileSize(rawURL, fileManager: fileManager)
@@ -151,7 +281,60 @@ enum LibraryDecisionEngine {
             if $0.dateLabel != $1.dateLabel { return $0.dateLabel > $1.dateLabel }
             return $0.filename.localizedStandardCompare($1.filename) == .orderedAscending
         }
-        return CullLibraryDecisionScan(libraryRootURL: root, decisions: decisions, scannedAt: Date())
+        let scannedAt = Date()
+        return CullLibraryDecisionScan(
+            libraryRootURL: root,
+            decisions: decisions,
+            imageStatistics: LibraryImageStatistics(
+                libraryRootURL: root,
+                unrated: imageBuckets[.unrated] ?? .empty,
+                kept: imageBuckets[.kept] ?? .empty,
+                rejected: imageBuckets[.rejected] ?? .empty,
+                scannedAt: scannedAt
+            ),
+            scannedAt: scannedAt
+        )
+    }
+
+    static func scanImageStatistics(libraryRootURL: URL, fileManager: FileManager = .default) throws -> LibraryImageStatistics {
+        let root = libraryRootURL.standardizedFileURL
+        guard isSafeDirectory(root, fileManager: fileManager) else {
+            throw CullLibraryDecisionError.libraryUnavailable(root)
+        }
+
+        var buckets = Dictionary(uniqueKeysWithValues: LibraryImageReviewState.allCases.map {
+            ($0, LibraryImageStatisticsBucket.empty)
+        })
+        for yearURL in childDirectories(of: root, fileManager: fileManager) where isYear(yearURL.lastPathComponent) {
+            for monthURL in childDirectories(of: yearURL, fileManager: fileManager) where isMonth(monthURL.lastPathComponent) {
+                for dayURL in childDirectories(of: monthURL, fileManager: fileManager) where isDay(dayURL.lastPathComponent, year: yearURL.lastPathComponent, month: monthURL.lastPathComponent) {
+                    addImageFiles(
+                        directImageFiles(in: dayURL, fileManager: fileManager),
+                        to: .unrated,
+                        buckets: &buckets,
+                        fileManager: fileManager
+                    )
+                    for disposition in CullDisposition.allCases {
+                        let decisionFolder = dayURL.appendingPathComponent(disposition.destinationFolderName, isDirectory: true)
+                        guard isSafeDirectory(decisionFolder, fileManager: fileManager) else { continue }
+                        addImageFiles(
+                            directImageFiles(in: decisionFolder, fileManager: fileManager),
+                            to: disposition == .select ? .kept : .rejected,
+                            buckets: &buckets,
+                            fileManager: fileManager
+                        )
+                    }
+                }
+            }
+        }
+
+        return LibraryImageStatistics(
+            libraryRootURL: root,
+            unrated: buckets[.unrated] ?? .empty,
+            kept: buckets[.kept] ?? .empty,
+            rejected: buckets[.rejected] ?? .empty,
+            scannedAt: Date()
+        )
     }
 
     static func makeTrashPlan(libraryRootURL: URL, fileManager: FileManager = .default) throws -> CullLibraryTrashPlan {
@@ -276,15 +459,28 @@ enum LibraryDecisionEngine {
         }
     }
 
-    private static func directCR3Files(in directory: URL, fileManager: FileManager) -> [URL] {
+    private static func directImageFiles(in directory: URL, fileManager: FileManager) -> [URL] {
         (try? fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles]
         ))?.filter { url in
-            url.pathExtension.caseInsensitiveCompare("cr3") == .orderedSame
+            supportedStillImageExtensions.contains(url.pathExtension.lowercased())
                 && isSafePlainFile(url, in: directory, fileManager: fileManager)
         } ?? []
+    }
+
+    private static func addImageFiles(
+        _ imageFiles: [URL],
+        to state: LibraryImageReviewState,
+        buckets: inout [LibraryImageReviewState: LibraryImageStatisticsBucket],
+        fileManager: FileManager
+    ) {
+        guard let current = buckets[state] else { return }
+        buckets[state] = LibraryImageStatisticsBucket(
+            imageCount: current.imageCount + imageFiles.count,
+            byteCount: current.byteCount + imageFiles.reduce(0) { $0 + fileSize($1, fileManager: fileManager) }
+        )
     }
 
     private static func isSafeDirectory(_ url: URL, fileManager: FileManager) -> Bool {
@@ -304,7 +500,7 @@ enum LibraryDecisionEngine {
         return fileManager.fileExists(atPath: url.path)
     }
 
-    private static func isRecognizedDateFolder(_ dateFolder: URL, beneath root: URL) -> Bool {
+    static func isRecognizedDateFolder(_ dateFolder: URL, beneath root: URL) -> Bool {
         let day = dateFolder.standardizedFileURL
         let month = day.deletingLastPathComponent()
         let year = month.deletingLastPathComponent()
