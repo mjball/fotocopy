@@ -75,6 +75,7 @@ if [ -n "$VERSION" ]; then
     echo ""
     echo "Creating GitHub release $VERSION..."
     INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
+    cd "$PROJECT_DIR"
     RELEASE_NOTES="$(cat <<NOTES
 ## Install
 
