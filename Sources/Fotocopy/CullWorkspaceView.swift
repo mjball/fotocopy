@@ -1489,6 +1489,8 @@ final class CullViewModel {
     var isMoving = false
     var movingFrameCount = 0
     var lastMoveSummary: String?
+    private(set) var previousCullFolderURL: URL?
+    private(set) var nextCullFolderURL: URL?
     var selectedBurstID: URL?
     var selectedFrameURL: URL?
     var inspectionSource: CullInspectionSource?
@@ -1506,6 +1508,7 @@ final class CullViewModel {
     private(set) var loadingCameraAFTargetURLs: Set<URL> = []
 
     private var scanTask: Task<Void, Never>?
+    private var folderNavigationTask: Task<Void, Never>?
     private var libraryScanTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
 
@@ -1527,6 +1530,14 @@ final class CullViewModel {
     }
 
     var canUndoLastMove: Bool { lastUndoOperation != nil && !isMoving }
+
+    var canNavigatePreviousCullFolder: Bool {
+        previousCullFolderURL != nil && !isScanning && !isMoving
+    }
+
+    var canNavigateNextCullFolder: Bool {
+        nextCullFolderURL != nil && !isScanning && !isMoving
+    }
 
     var configuredLibraryURL: URL? {
         guard let path = UserDefaults.standard.string(forKey: PreferenceKeys.destinationPath),
@@ -1562,6 +1573,21 @@ final class CullViewModel {
     func requestUse(folder: URL) {
         destination = .bursts
         use(folder: folder)
+    }
+
+    func moveCullFolder(by offset: Int) {
+        guard !isScanning, !isMoving else { return }
+
+        switch offset {
+        case ..<0:
+            guard let previousCullFolderURL else { return }
+            requestUse(folder: previousCullFolderURL)
+        case 1...:
+            guard let nextCullFolderURL else { return }
+            requestUse(folder: nextCullFolderURL)
+        default:
+            return
+        }
     }
 
     func showLibraryDecisions() {
@@ -1702,6 +1728,7 @@ final class CullViewModel {
 
     private func startScan() {
         guard let folderURL, !isScanning, !isMoving else { return }
+        refreshCullFolderNavigation(for: folderURL)
         scanTask?.cancel()
         scanResult = nil
         dispositions.removeAll()
@@ -1758,6 +1785,49 @@ final class CullViewModel {
         scanTask = nil
         isScanning = false
         currentFilename = "Cancelled"
+    }
+
+    /// Folder discovery walks only the three date-directory levels and checks
+    /// filenames, so it never decodes photos or reads their metadata. Run it
+    /// off the main actor to keep the current review responsive on an external
+    /// drive.
+    private func refreshCullFolderNavigation(for currentFolder: URL) {
+        folderNavigationTask?.cancel()
+        previousCullFolderURL = nil
+        nextCullFolderURL = nil
+
+        let roots = [configuredLibraryURL, CullFolderNavigation.libraryRoot(containing: currentFolder)]
+            .compactMap { $0 }
+            .reduce(into: [URL]()) { roots, root in
+                if !roots.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
+                    roots.append(root)
+                }
+            }
+        guard !roots.isEmpty else { return }
+
+        let standardizedCurrentFolder = currentFolder.standardizedFileURL
+        folderNavigationTask = Task { [weak self] in
+            let neighbors = await Task.detached(priority: .utility) { () -> CullFolderNeighbors? in
+                for root in roots {
+                    if let neighbors = CullFolderNavigation.neighbors(
+                        of: standardizedCurrentFolder,
+                        in: root
+                    ) {
+                        return neighbors
+                    }
+                }
+                return nil
+            }.value
+
+            guard !Task.isCancelled,
+                  let self,
+                  self.folderURL?.standardizedFileURL == standardizedCurrentFolder else {
+                return
+            }
+            self.previousCullFolderURL = neighbors?.previous
+            self.nextCullFolderURL = neighbors?.next
+            self.folderNavigationTask = nil
+        }
     }
 
     func syncSelectedFrame() {
