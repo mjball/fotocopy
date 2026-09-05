@@ -206,6 +206,20 @@ private struct CullCommands: Commands {
 
             Divider()
 
+            Button("Previous Cull Folder") {
+                model.moveCullFolder(by: -1)
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(!isCullActive || !model.canNavigatePreviousCullFolder)
+
+            Button("Next Cull Folder") {
+                model.moveCullFolder(by: 1)
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(!isCullActive || !model.canNavigateNextCullFolder)
+
+            Divider()
+
             Button("Previous Frame") {
                 moveFrame(by: -1)
             }

@@ -67,6 +67,7 @@ struct FotocopyShellView: View {
                     HStack(spacing: 10) {
                         if cullModel.folderURL != nil {
                             CullReviewLayoutToolbarControl(layout: $cullReviewLayout)
+                            CullFolderNavigationToolbarControl(model: cullModel)
                         }
 
                         if cullModel.folderURL != nil, driveTemperatureMonitor.primaryReading != nil {
@@ -211,6 +212,38 @@ struct FotocopyShellView: View {
         guard workspace != .importPhotos else { return }
         workspace = .importPhotos
         sidebarSelection = nil
+    }
+}
+
+/// These compact controls stay next to the review layout because both change
+/// what the culler is looking at. Their full names and shortcuts remain
+/// available from the Cull menu and in the help text.
+private struct CullFolderNavigationToolbarControl: View {
+    @Bindable var model: CullViewModel
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                model.moveCullFolder(by: -1)
+            } label: {
+                Image(systemName: "chevron.backward")
+            }
+            .accessibilityLabel("Previous Cull Folder")
+            .help("Previous Cull Folder (⌘[)")
+            .disabled(!model.canNavigatePreviousCullFolder)
+
+            Button {
+                model.moveCullFolder(by: 1)
+            } label: {
+                Image(systemName: "chevron.forward")
+            }
+            .accessibilityLabel("Next Cull Folder")
+            .help("Next Cull Folder (⌘])")
+            .disabled(!model.canNavigateNextCullFolder)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityElement(children: .contain)
     }
 }
 
