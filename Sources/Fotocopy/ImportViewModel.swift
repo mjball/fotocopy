@@ -40,6 +40,9 @@ final class ImportViewModel {
     var scanTotal = 0
     var previewError: String?
     var manifestAttention: ManifestAttention?
+    var manifestDestinationSuggestions: [String] = []
+    var manifestDestinationSearchWasLimited = false
+    var automaticallySelectedDestinationPath: String?
     var sourceAvailability: SourcePathAvailability?
     var dateFrom: Date?
     var dateTo: Date?
@@ -91,6 +94,9 @@ final class ImportViewModel {
         }
         if let sourceAvailability {
             return sourceAvailability.message
+        }
+        if !manifestDestinationSuggestions.isEmpty {
+            return "Choose an existing destination manifest"
         }
         if isRebuildingManifest {
             return "Destination manifest rebuild in progress..."
@@ -148,6 +154,8 @@ final class ImportViewModel {
         previewResult = nil
         previewError = nil
         manifestAttention = nil
+        manifestDestinationSuggestions = []
+        manifestDestinationSearchWasLimited = false
         sourceAvailability = nil
         scanScanned = 0
         scanTotal = 0
@@ -168,6 +176,10 @@ final class ImportViewModel {
 
         guard !sourcePath.isEmpty, !destinationPath.isEmpty else { return }
         guard !progress.isImporting, !progress.isComplete else { return }
+
+        if automaticallySelectedDestinationPath != destinationPath {
+            automaticallySelectedDestinationPath = nil
+        }
 
         let availability = Self.sourceAvailability(
             for: sourcePath,
@@ -198,6 +210,35 @@ final class ImportViewModel {
             let checker = DuplicateChecker()
 
             do {
+                // Resolve an accidentally selected parent folder before
+                // DuplicateChecker enumerates destination media. This lookup
+                // is a shallow, bounded manifest search and keeps a volume root
+                // from turning into a long whole-drive scan.
+                let manifestSearch = await Task.detached(priority: .userInitiated) {
+                    DestinationManifest.findExistingManifestRoots(below: dst)
+                }.value
+                guard isPreviewRequestCurrent(request) else { return }
+
+                let discoveredPaths = manifestSearch.roots.map(\.path)
+                if discoveredPaths.count == 1,
+                   discoveredPaths[0] != request.destinationPath,
+                   !manifestSearch.reachedDirectoryLimit {
+                    automaticallySelectedDestinationPath = discoveredPaths[0]
+                    isPreviewing = false
+                    scanScanned = 0
+                    scanTotal = 0
+                    return
+                }
+                if discoveredPaths.count > 1 ||
+                    (manifestSearch.reachedDirectoryLimit && !discoveredPaths.isEmpty) {
+                    manifestDestinationSuggestions = discoveredPaths
+                    manifestDestinationSearchWasLimited = manifestSearch.reachedDirectoryLimit
+                    isPreviewing = false
+                    scanScanned = 0
+                    scanTotal = 0
+                    return
+                }
+
                 let indexStatus = try await checker.buildIndex(at: dst)
                 guard applyDestinationIndexStatus(indexStatus, for: request) else { return }
 

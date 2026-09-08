@@ -21,6 +21,17 @@ struct DuplicateCheckerTests {
         try data.write(to: dir.appendingPathComponent(name))
     }
 
+    private func createManifestFile(at dir: URL) throws {
+        let manifest = DestinationManifest(destinationURL: dir)
+        try FileManager.default.createDirectory(
+            at: manifest.metadataDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        guard FileManager.default.createFile(atPath: manifest.databaseURL.path, contents: Data()) else {
+            throw NSError(domain: "DuplicateCheckerTests", code: 10)
+        }
+    }
+
     private func manifestState(at dir: URL, relativePath: String) throws -> (sourceBucket: String, presence: String, lastSeenAt: Double, deletedAt: Double?) {
         let manifest = DestinationManifest(destinationURL: dir)
         var db: OpaquePointer?
@@ -87,6 +98,55 @@ struct DuplicateCheckerTests {
         #expect(status == .ready)
         let result = await checker.isDuplicate(filename: "photo.jpg", size: 1000, sourceBucket: DestinationManifest.rootBucket)
         #expect(result == false)
+    }
+
+    @Test func findsUniqueNestedManifestWithABoundedSearch() throws {
+        let root = try makeTempDir()
+        defer { cleanup(root) }
+        let library = root.appendingPathComponent("Fotocopy")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try createManifestFile(at: library)
+        try createFile(root, name: "unrelated.jpg", size: 100)
+
+        let result = DestinationManifest.findExistingManifestRoots(below: root)
+
+        #expect(result.roots == [library.standardizedFileURL])
+        #expect(result.reachedDirectoryLimit == false)
+    }
+
+    @Test func findsDefaultFotocopyManifestBeforeOpeningTheSelectedDirectory() throws {
+        let root = try makeTempDir()
+        defer { cleanup(root) }
+        let library = root.appendingPathComponent("Fotocopy")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try createManifestFile(at: library)
+
+        let result = DestinationManifest.findExistingManifestRoots(
+            below: root,
+            maximumDirectories: 1
+        )
+
+        #expect(result.roots == [library.standardizedFileURL])
+        #expect(result.reachedDirectoryLimit == false)
+    }
+
+    @Test func doesNotAutoSelectAResultFromAnIncompleteSearch() throws {
+        let root = try makeTempDir()
+        defer { cleanup(root) }
+        let first = root.appendingPathComponent("A-library")
+        let second = root.appendingPathComponent("B-library")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        try createManifestFile(at: first)
+        try createManifestFile(at: second)
+
+        let result = DestinationManifest.findExistingManifestRoots(
+            below: root,
+            maximumDirectories: 2
+        )
+
+        #expect(result.roots == [first.standardizedFileURL])
+        #expect(result.reachedDirectoryLimit == true)
     }
 
     @Test func indexesExistingFiles() async throws {

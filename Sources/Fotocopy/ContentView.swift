@@ -19,7 +19,7 @@ struct ContentView: View {
             pathSection
             modeSection
             if !vm.progress.isComplete {
-                if vm.isPreviewing || vm.isRebuildingManifest || vm.manifestAttention != nil || vm.sourceAvailability != nil || vm.previewResult != nil || vm.previewError != nil {
+                if vm.isPreviewing || vm.isRebuildingManifest || vm.manifestAttention != nil || !vm.manifestDestinationSuggestions.isEmpty || vm.sourceAvailability != nil || vm.previewResult != nil || vm.previewError != nil {
                     previewSection
                 }
                 actionSection
@@ -39,6 +39,10 @@ struct ContentView: View {
         .onChange(of: excludedExtensionsRaw) { _, new in vm.excludedExtensionsRaw = new }
         .onChange(of: excludedCameraModelsRaw) { _, new in vm.excludedCameraModelsRaw = new }
         .onChange(of: transferMode) { _, new in vm.transferMode = new }
+        .onChange(of: vm.automaticallySelectedDestinationPath) { _, recoveredPath in
+            guard let recoveredPath, destinationPath != recoveredPath else { return }
+            destinationPath = recoveredPath
+        }
         .onChange(of: volumeWatcher.lastMounted) { _, mountedVolumes in
             guard !mountedVolumes.isEmpty else { return }
             for mounted in mountedVolumes {
@@ -214,6 +218,16 @@ struct ContentView: View {
 
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let automaticallySelectedDestinationPath = vm.automaticallySelectedDestinationPath {
+                Label(
+                    "Using existing destination manifest at \(automaticallySelectedDestinationPath)",
+                    systemImage: "externaldrive.badge.checkmark"
+                )
+                .font(.caption)
+                .foregroundStyle(.green)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             if let sourceAvailability = vm.sourceAvailability {
                 Label(sourceAvailability.message ?? "Source folder is not available", systemImage: "externaldrive.badge.questionmark")
                     .font(.caption)
@@ -250,6 +264,28 @@ struct ContentView: View {
                         .controlSize(.small)
                     Text("Rebuilding destination manifest...")
                         .foregroundStyle(.secondary)
+                }
+            } else if !vm.manifestDestinationSuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Choose Existing Destination", systemImage: "externaldrive.badge.exclamationmark")
+                        .foregroundStyle(.orange)
+                    Text(
+                        vm.manifestDestinationSearchWasLimited
+                            ? "Fotocopy found an existing destination manifest, but stopped its bounded manifest search before scanning the selected folder's media. Choose the library you want to use."
+                            : "Fotocopy found more than one existing destination manifest and stopped before scanning the selected folder's media. Choose the library you want to use."
+                    )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(vm.manifestDestinationSuggestions, id: \.self) { path in
+                        Button {
+                            destinationPath = path
+                        } label: {
+                            Text("Use \(path)")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                 }
             } else if let attention = vm.manifestAttention {
                 VStack(alignment: .leading, spacing: 8) {
