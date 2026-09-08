@@ -344,11 +344,7 @@ private struct CullCommands: Commands {
     }
 
     private func moveFrame(by offset: Int) {
-        if model.isReviewingSingles {
-            model.moveSelectedSingleFrame(by: offset)
-        } else if let selectedBurst {
-            model.moveSelectedFrame(in: selectedBurst, by: offset)
-        }
+        model.moveSelectedReviewFrame(by: offset)
     }
 
     private func keepCurrentAndRejectRest() {
