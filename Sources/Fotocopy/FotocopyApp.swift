@@ -66,6 +66,25 @@ struct FotocopyApp: App {
                 Divider()
                 Toggle("Show Camera AF Target", isOn: cameraAFTargetVisibility)
                     .keyboardShortcut("a", modifiers: [.command, .option])
+
+                Divider()
+                Button("Full") {
+                    cullReviewLayout = .browse
+                }
+                .keyboardShortcut("f", modifiers: [])
+                .disabled(!isCullLayoutAvailable)
+
+                Button("Compact") {
+                    cullReviewLayout = .review
+                }
+                .keyboardShortcut("c", modifiers: [])
+                .disabled(!isCullLayoutAvailable)
+
+                Button("Minimal") {
+                    cullReviewLayout = .focus
+                }
+                .keyboardShortcut("m", modifiers: [])
+                .disabled(!isCullLayoutAvailable)
             }
 
             CullCommands(
@@ -85,6 +104,11 @@ struct FotocopyApp: App {
                 UserDefaults.standard.set($0, forKey: PreferenceKeys.cullShowsAFTarget)
             }
         )
+    }
+
+    private var isCullLayoutAvailable: Bool {
+        FotocopyWorkspace(rawValue: workspaceRaw) == .cullBursts &&
+            cullModel.folderURL != nil
     }
 
     private func checkForUpdates() {
@@ -314,17 +338,6 @@ private struct CullCommands: Commands {
                 model.revealSelectedFrame()
             }
             .disabled(!canReviewFrame)
-
-            Divider()
-
-            Menu("Review Layout") {
-                ForEach(CullReviewLayout.allCases) { candidate in
-                    Button(candidate.title) {
-                        layout = candidate
-                    }
-                }
-            }
-            .disabled(!isCullActive || model.folderURL == nil)
 
             Button("Use Camera AF Target") {
                 model.useCameraAFTarget()
