@@ -282,6 +282,118 @@ import Testing
     ) == bursts[0].id)
 }
 
+@Test func reviewGroupNavigationIncludesSingleFramesAfterBursts() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let first = PhotoBurst(frames: [makePhoto(number: 1, at: start)])
+    let second = PhotoBurst(frames: [makePhoto(number: 2, at: start.addingTimeInterval(2))])
+    let singles = [makePhoto(number: 3, at: start.addingTimeInterval(4))]
+    let groups = [
+        CullReviewGroup(id: .burst(first.id), frames: first.frames),
+        CullReviewGroup(id: .burst(second.id), frames: second.frames),
+        CullReviewGroup(id: .singleFrames, frames: singles)
+    ]
+
+    #expect(CullReviewGroupNavigation.groupID(
+        in: groups,
+        adjacentTo: .burst(second.id),
+        offset: 1
+    ) == .singleFrames)
+    #expect(CullReviewGroupNavigation.groupID(
+        in: groups,
+        adjacentTo: .singleFrames,
+        offset: -1
+    ) == .burst(second.id))
+    #expect(CullReviewGroupNavigation.groupID(
+        in: groups,
+        adjacentTo: .singleFrames,
+        offset: 1
+    ) == .singleFrames)
+    #expect(CullReviewGroupNavigation.initialGroupID(
+        in: groups,
+        preferring: nil,
+        selectingLastReviewGroup: true
+    ) == .singleFrames)
+}
+
+@Test func reviewFrameEdgesCrossOnlyAtTheOuterDateBoundary() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let burst = PhotoBurst(frames: [makePhoto(number: 1, at: start)])
+    let singles = [
+        makePhoto(number: 2, at: start.addingTimeInterval(2)),
+        makePhoto(number: 3, at: start.addingTimeInterval(4))
+    ]
+    let groups = [
+        CullReviewGroup(id: .burst(burst.id), frames: burst.frames),
+        CullReviewGroup(id: .singleFrames, frames: singles)
+    ]
+
+    #expect(CullReviewGroupNavigation.crossesFolderBoundary(
+        in: groups,
+        selectedGroupID: .burst(burst.id),
+        visibleFrames: burst.frames,
+        selectedFrameURL: burst.frames[0].url,
+        offset: -1
+    ))
+    #expect(!CullReviewGroupNavigation.crossesFolderBoundary(
+        in: groups,
+        selectedGroupID: .burst(burst.id),
+        visibleFrames: burst.frames,
+        selectedFrameURL: burst.frames[0].url,
+        offset: 1
+    ))
+    #expect(!CullReviewGroupNavigation.crossesFolderBoundary(
+        in: groups,
+        selectedGroupID: .singleFrames,
+        visibleFrames: singles,
+        selectedFrameURL: singles[0].url,
+        offset: 1
+    ))
+    #expect(CullReviewGroupNavigation.crossesFolderBoundary(
+        in: groups,
+        selectedGroupID: .singleFrames,
+        visibleFrames: singles,
+        selectedFrameURL: singles[1].url,
+        offset: 1
+    ))
+}
+
+@Test func reviewGroupFallbackSelectsSinglesForSinglesOnlyFolder() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let singlesOnly = [
+        CullReviewGroup(
+            id: .singleFrames,
+            frames: [makePhoto(number: 1, at: start)]
+        )
+    ]
+    let formerBurstID = URL(fileURLWithPath: "/tmp/previous-burst.CR3")
+
+    #expect(CullReviewGroupNavigation.initialGroupID(
+        in: singlesOnly,
+        preferring: .burst(formerBurstID)
+    ) == .singleFrames)
+    #expect(CullReviewGroupNavigation.initialGroupID(
+        in: singlesOnly,
+        preferring: .singleFrames
+    ) == .singleFrames)
+}
+
+@Test func cullScanExposesSinglesAsItsOwnReviewGroup() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let burst = PhotoBurst(frames: [makePhoto(number: 1, at: start)])
+    let single = makePhoto(number: 2, at: start.addingTimeInterval(2))
+    let scan = CullFolderScan(
+        folder: URL(fileURLWithPath: "/tmp/cull-day", isDirectory: true),
+        cr3Count: 2,
+        unreadableMetadataCount: 0,
+        bursts: [burst],
+        singleFrames: [single],
+        duration: 0
+    )
+
+    #expect(scan.reviewGroups.map(\.id) == [.burst(burst.id), .singleFrames])
+    #expect(scan.reviewGroups.last?.frames == [single])
+}
+
 @Test func cullKeyboardShortcutsMapFrameAndBurstDecisions() {
     #expect(CullKeyboardShortcuts.action(
         keyCode: 40,

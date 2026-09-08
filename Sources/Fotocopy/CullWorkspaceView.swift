@@ -8,6 +8,25 @@ struct CullWorkspaceView: View {
 
     var body: some View {
         detail
+        .background {
+            if model.selectedReviewGroup != nil {
+                CullNavigationKeyHandler(
+                    moveFrame: { model.moveSelectedReviewFrame(by: $0) },
+                    moveBurst: { model.moveSelectedReviewGroup(by: $0) },
+                    keepCurrentFrame: { model.keepSelectedFrame() },
+                    keepCurrentAndRejectRest: {
+                        guard let burst = model.selectedBurst else { return }
+                        model.keepSelectedAndRejectRest(in: burst)
+                    },
+                    rejectCurrentFrame: { model.rejectSelectedFrame() },
+                    rejectBurst: {
+                        guard let burst = model.selectedBurst else { return }
+                        model.markAllRejecting(in: burst)
+                    }
+                )
+                .frame(width: 0, height: 0)
+            }
+        }
         .task {
             model.resumeLastScanIfNeeded()
             model.refreshLibraryImageStatisticsIfNeeded()
@@ -31,11 +50,11 @@ struct CullWorkspaceView: View {
                 "Finding photos",
                 systemImage: "rectangle.stack.badge.play",
                 description: Text("Fotocopy reads this date folder plus Keeps and Rejects, then rebuilds burst and single-frame review from the files on disk."))
-        } else if model.destination == .bursts, let burst = model.selectedBurst {
+        } else if let burst = model.selectedBurst {
             BurstReviewView(burst: burst, model: model, layout: layout)
-        } else if model.destination == .singleFrames, let frame = model.selectedSingleFrame {
+        } else if model.isReviewingSingles, let frame = model.selectedSingleFrame {
             SingleFrameReviewView(frame: frame, model: model, layout: layout)
-        } else if model.destination == .singleFrames, model.scanResult != nil {
+        } else if model.isReviewingSingles, model.scanResult != nil {
             SingleFrameReviewEmptyState(model: model, layout: layout)
         } else if let scan = model.scanResult, scan.cr3Count == 0 {
             ContentUnavailableView(
@@ -226,7 +245,7 @@ struct CullSidebarSections: View {
                             }
                         }
                         .tag(FotocopySidebarDestination.burst(burst.id))
-                        .id(burst.id)
+                        .id(FotocopySidebarDestination.burst(burst.id))
                     }
                 }
             }
@@ -248,6 +267,7 @@ struct CullSidebarSections: View {
                         }
                     }
                     .tag(FotocopySidebarDestination.singleFrames)
+                    .id(FotocopySidebarDestination.singleFrames)
                 }
             }
         }
@@ -416,17 +436,6 @@ private struct SingleFrameReviewView: View {
             case .focus:
                 focusContent
             }
-        }
-        .background {
-            CullNavigationKeyHandler(
-                moveFrame: { model.moveSelectedSingleFrame(by: $0) },
-                moveBurst: { _ in },
-                keepCurrentFrame: { model.keepSelectedFrame() },
-                keepCurrentAndRejectRest: { },
-                rejectCurrentFrame: { model.rejectSelectedFrame() },
-                rejectBurst: { }
-            )
-            .frame(width: 0, height: 0)
         }
         .onChange(of: frame.url) { viewport = CullPreviewViewport() }
         .task(id: frame.url) {
@@ -772,29 +781,6 @@ private struct BurstReviewView: View {
             case .focus:
                 focusReviewContent
             }
-        }
-        .background {
-            CullNavigationKeyHandler(
-                moveFrame: { offset in
-                    model.moveSelectedFrame(in: burst, by: offset)
-                },
-                moveBurst: { offset in
-                    model.moveSelectedBurst(by: offset)
-                },
-                keepCurrentFrame: {
-                    model.keepSelectedFrame()
-                },
-                keepCurrentAndRejectRest: {
-                    model.keepSelectedAndRejectRest(in: burst)
-                },
-                rejectCurrentFrame: {
-                    model.rejectSelectedFrame()
-                },
-                rejectBurst: {
-                    model.markAllRejecting(in: burst)
-                }
-            )
-            .frame(width: 0, height: 0)
         }
         .onChange(of: burst.id) {
             viewport = CullPreviewViewport()
@@ -2050,7 +2036,7 @@ private struct CullUndoOperation: Sendable {
 @Observable
 @MainActor
 final class CullViewModel {
-    var destination: CullDestination = .bursts
+    var destination: CullDestination = .review(nil)
     var folderURL: URL?
     var scanResult: CullFolderScan?
     var isScanning = false
@@ -2066,7 +2052,6 @@ final class CullViewModel {
     var lastMoveSummary: String?
     private(set) var previousCullFolderURL: URL?
     private(set) var nextCullFolderURL: URL?
-    var selectedBurstID: URL?
     var selectedFrameURL: URL?
     /// Singles open as a visual timeline. Keep/Reject moves selection to the
     /// next undecided photo but leaves its decided thumbnail visible.
@@ -2089,6 +2074,9 @@ final class CullViewModel {
     private(set) var loadingCameraAFTargetURLs: Set<URL> = []
 
     private var scanTask: Task<Void, Never>?
+    private var preferredReviewGroupIDAfterScan: CullReviewGroupID?
+    private var selectsLastReviewGroupAfterScan = false
+    private var selectsLastFrameAfterScan = false
     private var folderNavigationTask: Task<Void, Never>?
     private var libraryScanTask: Task<Void, Never>?
     private var libraryImageStatisticsTask: Task<Void, Never>?
@@ -2107,8 +2095,23 @@ final class CullViewModel {
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    var selectedReviewGroupID: CullReviewGroupID? {
+        guard case let .review(groupID) = destination else { return nil }
+        return groupID
+    }
+
+    var selectedReviewGroup: CullReviewGroup? {
+        guard let selectedReviewGroupID else { return nil }
+        return scanResult?.reviewGroups.first { $0.id == selectedReviewGroupID }
+    }
+
+    var isReviewingSingles: Bool {
+        selectedReviewGroupID == .singleFrames
+    }
+
     var selectedBurst: PhotoBurst? {
-        scanResult?.bursts.first { $0.id == selectedBurstID }
+        guard case let .burst(burstID) = selectedReviewGroupID else { return nil }
+        return scanResult?.bursts.first { $0.id == burstID }
     }
 
     var filteredSingleFrames: [CullPhoto] {
@@ -2116,8 +2119,12 @@ final class CullViewModel {
         return frames.filter { singleFrameFilter.includes(dispositions[$0.url]) }
     }
 
+    private func visibleFrames(in group: CullReviewGroup) -> [CullPhoto] {
+        group.id == .singleFrames ? filteredSingleFrames : group.frames
+    }
+
     var selectedSingleFrame: CullPhoto? {
-        guard destination == .singleFrames,
+        guard isReviewingSingles,
               let selectedFrameURL else { return nil }
         return filteredSingleFrames.first { $0.url == selectedFrameURL }
     }
@@ -2168,20 +2175,35 @@ final class CullViewModel {
     }
 
     func requestUse(folder: URL) {
-        destination = .bursts
         use(folder: folder)
     }
 
     func moveCullFolder(by offset: Int) {
+        moveCullFolder(by: offset, enteringAtReviewBoundary: false)
+    }
+
+    private func moveCullFolder(by offset: Int, enteringAtReviewBoundary: Bool) {
         guard !isScanning, !isMoving else { return }
 
         switch offset {
         case ..<0:
             guard let previousCullFolderURL else { return }
-            requestUse(folder: previousCullFolderURL)
+            if enteringAtReviewBoundary {
+                use(
+                    folder: previousCullFolderURL,
+                    selectingLastReviewGroup: true,
+                    selectingLastFrame: true
+                )
+            } else {
+                use(folder: previousCullFolderURL, preferring: selectedReviewGroupID)
+            }
         case 1...:
             guard let nextCullFolderURL else { return }
-            requestUse(folder: nextCullFolderURL)
+            if enteringAtReviewBoundary {
+                use(folder: nextCullFolderURL)
+            } else {
+                use(folder: nextCullFolderURL, preferring: selectedReviewGroupID)
+            }
         default:
             return
         }
@@ -2193,22 +2215,27 @@ final class CullViewModel {
     }
 
     func showBurstCulling() {
-        destination = .bursts
         resumeLastScanIfNeeded()
         refreshLibraryImageStatisticsIfNeeded()
-        if selectedBurst == nil, let firstBurst = scanResult?.bursts.first {
-            selectBurst(withID: firstBurst.id)
+        if selectedReviewGroup == nil,
+           let groupID = CullReviewGroupNavigation.initialGroupID(
+               in: scanResult?.reviewGroups ?? [],
+               preferring: selectedReviewGroupID
+           ) {
+            selectReviewGroup(withID: groupID)
         }
     }
 
     func showSingleFrameCulling() {
-        destination = .singleFrames
-        selectedBurstID = nil
-        inspectionSource = nil
-        isPickingInspectionPoint = false
-        resumeLastScanIfNeeded()
+        if isScanning {
+            preferredReviewGroupIDAfterScan = .singleFrames
+        } else if scanResult == nil, folderURL != nil, !isMoving {
+            startScan(preferring: .singleFrames)
+        }
         refreshLibraryImageStatisticsIfNeeded()
-        selectFirstSingleFrameMatchingFilter()
+        if scanResult?.reviewGroups.contains(where: { $0.id == .singleFrames }) == true {
+            selectReviewGroup(withID: .singleFrames)
+        }
     }
 
     func refreshLibraryImageStatisticsIfNeeded() {
@@ -2361,19 +2388,27 @@ final class CullViewModel {
     }
 
     func openDecisionDate(_ decision: CullLibraryDecision) {
-        destination = .bursts
         use(folder: decision.dateFolderURL)
     }
 
-    private func use(folder: URL) {
+    private func use(
+        folder: URL,
+        preferring reviewGroupID: CullReviewGroupID? = nil,
+        selectingLastReviewGroup: Bool = false,
+        selectingLastFrame: Bool = false
+    ) {
         folderURL = folder
         UserDefaults.standard.set(folder.path, forKey: PreferenceKeys.lastCullFolder)
-        startScan()
+        startScan(
+            preferring: reviewGroupID,
+            selectingLastReviewGroup: selectingLastReviewGroup,
+            selectingLastFrame: selectingLastFrame
+        )
     }
 
     func scan() {
         refreshLibraryImageStatistics()
-        startScan()
+        startScan(preferring: selectedReviewGroupID)
     }
 
     /// The last reviewed date folder is retained between launches. Start a
@@ -2381,18 +2416,25 @@ final class CullViewModel {
     /// transient burst list.
     func resumeLastScanIfNeeded() {
         guard folderURL != nil, scanResult == nil, !isScanning, !isMoving else { return }
-        startScan()
+        startScan(preferring: selectedReviewGroupID)
     }
 
-    private func startScan() {
+    private func startScan(
+        preferring preferredReviewGroupID: CullReviewGroupID? = nil,
+        selectingLastReviewGroup: Bool = false,
+        selectingLastFrame: Bool = false
+    ) {
         guard let folderURL, !isScanning, !isMoving else { return }
+        preferredReviewGroupIDAfterScan = preferredReviewGroupID
+        selectsLastReviewGroupAfterScan = selectingLastReviewGroup
+        selectsLastFrameAfterScan = selectingLastFrame
         refreshCullFolderNavigation(for: folderURL)
         scanTask?.cancel()
         scanResult = nil
         dispositions.removeAll()
         lastUndoOperation = nil
         lastMoveSummary = nil
-        selectedBurstID = nil
+        destination = .review(nil)
         selectedFrameURL = nil
         inspectionSource = nil
         isPickingInspectionPoint = false
@@ -2425,13 +2467,17 @@ final class CullViewModel {
                 guard !Task.isCancelled else { return }
                 scanResult = result
                 dispositions = Self.onDiskDispositions(in: result)
-                if destination == .singleFrames {
-                    selectedBurstID = nil
-                    selectFirstSingleFrameMatchingFilter()
-                } else {
-                    selectedBurstID = result.bursts.first?.id
-                    selectedFrameURL = result.bursts.first?.frames.first?.url
+                let groupID = CullReviewGroupNavigation.initialGroupID(
+                    in: result.reviewGroups,
+                    preferring: preferredReviewGroupIDAfterScan,
+                    selectingLastReviewGroup: selectsLastReviewGroupAfterScan
+                )
+                if let groupID {
+                    selectReviewGroup(withID: groupID, selectingLastFrame: selectsLastFrameAfterScan)
                 }
+                preferredReviewGroupIDAfterScan = nil
+                selectsLastReviewGroupAfterScan = false
+                selectsLastFrameAfterScan = false
             } catch is CancellationError {
                 // A new scan replaced this one.
             } catch {
@@ -2505,13 +2551,25 @@ final class CullViewModel {
         }
     }
 
+    func selectReviewGroup(withID groupID: CullReviewGroupID, selectingLastFrame: Bool = false) {
+        guard let group = scanResult?.reviewGroups.first(where: { $0.id == groupID }) else { return }
+        destination = .review(group.id)
+        selectedFrameURL = selectingLastFrame
+            ? visibleFrames(in: group).last?.url
+            : visibleFrames(in: group).first?.url
+        inspectionSource = nil
+        isPickingInspectionPoint = false
+        automaticallyUseCameraAFTargetForSelectedFrame()
+    }
+
     func selectFrame(_ url: URL) {
         selectedFrameURL = url
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
     func selectSingleFrame(_ url: URL) {
-        guard filteredSingleFrames.contains(where: { $0.url == url }) else { return }
+        guard isReviewingSingles,
+              filteredSingleFrames.contains(where: { $0.url == url }) else { return }
         selectedFrameURL = url
         inspectionSource = nil
         isPickingInspectionPoint = false
@@ -2519,7 +2577,7 @@ final class CullViewModel {
     }
 
     func selectFirstSingleFrameMatchingFilter() {
-        guard destination == .singleFrames else { return }
+        guard isReviewingSingles else { return }
         selectedFrameURL = filteredSingleFrames.first?.url
         inspectionSource = nil
         isPickingInspectionPoint = false
@@ -2535,6 +2593,24 @@ final class CullViewModel {
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
+    func moveSelectedReviewFrame(by offset: Int) {
+        guard let scanResult, let group = selectedReviewGroup else { return }
+        let visibleFrames = self.visibleFrames(in: group)
+        if CullReviewGroupNavigation.crossesFolderBoundary(
+            in: scanResult.reviewGroups,
+            selectedGroupID: group.id,
+            visibleFrames: visibleFrames,
+            selectedFrameURL: selectedFrameURL,
+            offset: offset
+        ) {
+            moveCullFolder(by: offset, enteringAtReviewBoundary: true)
+        } else if isReviewingSingles {
+            moveSelectedSingleFrame(by: offset)
+        } else if let burst = selectedBurst {
+            moveSelectedFrame(in: burst, by: offset)
+        }
+    }
+
     func moveSelectedFrame(in burst: PhotoBurst, by offset: Int) {
         selectedFrameURL = CullFrameNavigation.frameURL(
             in: burst.frames,
@@ -2544,21 +2620,16 @@ final class CullViewModel {
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
-    func moveSelectedBurst(by offset: Int) {
+    func moveSelectedReviewGroup(by offset: Int) {
         guard let scanResult,
-              let burstID = CullBurstNavigation.burstID(
-                  in: scanResult.bursts,
-                  adjacentTo: selectedBurstID,
+              let groupID = CullReviewGroupNavigation.groupID(
+                  in: scanResult.reviewGroups,
+                  adjacentTo: selectedReviewGroupID,
                   offset: offset
-              ),
-              let burst = scanResult.bursts.first(where: { $0.id == burstID }) else {
+              ) else {
             return
         }
-
-        selectedBurstID = burst.id
-        selectedFrameURL = burst.frames.first?.url
-        inspectionSource = nil
-        isPickingInspectionPoint = false
+        selectReviewGroup(withID: groupID)
     }
 
     func beginPickingInspectionPoint() {
@@ -2652,13 +2723,13 @@ final class CullViewModel {
                     self.cameraAFTargets[resultURL] = target
                 }
             }
-            guard self.destination == .singleFrames, self.selectedFrameURL == url else { return }
+            guard self.isReviewingSingles, self.selectedFrameURL == url else { return }
             self.automaticallyUseCameraAFTargetForSelectedFrame()
         }
     }
 
     private func automaticallyUseCameraAFTarget(for burst: PhotoBurst) {
-        guard selectedBurstID == burst.id else { return }
+        guard selectedReviewGroupID == .burst(burst.id) else { return }
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -2723,8 +2794,8 @@ final class CullViewModel {
         moveDisposition(
             of: selectedFrameURL,
             to: .select,
-            advanceAfterMove: destination != .singleFrames,
-            advanceAfterMovingSingleFrame: destination == .singleFrames ? selectedFrameURL : nil
+            advanceAfterMove: !isReviewingSingles,
+            advanceAfterMovingSingleFrame: isReviewingSingles ? selectedFrameURL : nil
         )
     }
 
@@ -2733,8 +2804,8 @@ final class CullViewModel {
         moveDisposition(
             of: selectedFrameURL,
             to: .reject,
-            advanceAfterMove: destination != .singleFrames,
-            advanceAfterMovingSingleFrame: destination == .singleFrames ? selectedFrameURL : nil
+            advanceAfterMove: !isReviewingSingles,
+            advanceAfterMovingSingleFrame: isReviewingSingles ? selectedFrameURL : nil
         )
     }
 
@@ -2817,7 +2888,7 @@ final class CullViewModel {
                 advanceToNextSingleFrame(after: singleFrameURL, replacements: [:])
             }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
-                selectBurst(withID: nextBurstID)
+                selectReviewGroup(withID: .burst(nextBurstID))
             }
             return
         }
@@ -2840,7 +2911,7 @@ final class CullViewModel {
                 advanceToNextSingleFrame(after: singleFrameURL, replacements: [:])
             }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
-                selectBurst(withID: nextBurstID)
+                selectReviewGroup(withID: .burst(nextBurstID))
             }
             return
         }
@@ -2880,7 +2951,7 @@ final class CullViewModel {
                     )
                 }
                 if let nextBurstID {
-                    self.selectBurst(withID: nextBurstID)
+                    self.selectReviewGroup(withID: .burst(nextBurstID))
                 }
                 self.isMoving = false
                 self.movingFrameCount = 0
@@ -2932,7 +3003,7 @@ final class CullViewModel {
     /// to the next undecided photo. A narrowed filter instead advances within
     /// that filter so a photographer can deliberately review prior choices.
     private func advanceToNextSingleFrame(after sourceURL: URL, replacements: [URL: URL]) {
-        guard destination == .singleFrames,
+        guard isReviewingSingles,
               let allFrames = scanResult?.singleFrames,
               !allFrames.isEmpty else {
             return
@@ -2979,14 +3050,6 @@ final class CullViewModel {
             offset: 1
         )
         return candidate == burstID ? nil : candidate
-    }
-
-    private func selectBurst(withID burstID: URL) {
-        guard let burst = scanResult?.bursts.first(where: { $0.id == burstID }) else { return }
-        selectedBurstID = burst.id
-        selectedFrameURL = burst.frames.first?.url
-        inspectionSource = nil
-        isPickingInspectionPoint = false
     }
 
     private func destinationURL(
@@ -3067,7 +3130,9 @@ final class CullViewModel {
             )
         }
 
-        selectedBurstID = selectedBurstID.map(rewrittenURL)
+        if case let .burst(selectedBurstID) = selectedReviewGroupID {
+            destination = .review(.burst(rewrittenURL(selectedBurstID)))
+        }
         selectedFrameURL = selectedFrameURL.map(rewrittenURL)
         dispositions = rewriteDictionary(dispositions, using: destinationBySource)
         cameraAFTargets = rewriteDictionary(cameraAFTargets, using: destinationBySource)
