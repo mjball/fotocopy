@@ -205,6 +205,10 @@ private struct CullCommands: Commands {
             !model.isMoving
     }
 
+    private var canQuickExport: Bool {
+        isCullActive && model.canQuickExport
+    }
+
     private var canUseCameraAFTarget: Bool {
         guard canReviewFrame, let selectedFrameURL = model.selectedFrameURL else { return false }
         return model.cameraAFTarget(for: selectedFrameURL) != nil
@@ -326,6 +330,14 @@ private struct CullCommands: Commands {
             }
             .keyboardShortcut("z", modifiers: .command)
             .disabled(!isCullActive || !model.canUndoLastMove)
+
+            Divider()
+
+            Button("Quick Export as JPEG…") {
+                model.quickExportSelectedPhotos()
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(!canQuickExport)
 
             Divider()
 

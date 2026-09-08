@@ -22,6 +22,7 @@ enum PreferenceKeys {
     static let cullScanWorkerCount = "cullScanWorkerCount"
     static let cullPreviewHeight = "cullPreviewHeight"
     static let cullShowsAFTarget = "cullShowsAFTarget"
+    static let lastQuickExportFolder = "lastQuickExportFolder"
 }
 
 enum CullSettings {
