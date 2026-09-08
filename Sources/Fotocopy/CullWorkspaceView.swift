@@ -411,6 +411,7 @@ private struct SingleFrameReviewView: View {
     @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
     @State private var previewHeightAtDragStart: Double?
     @State private var viewport = CullPreviewViewport()
+    @State private var isFocusAssistanceExpanded = false
 
     private let defaultPreviewHeight = 540.0
     private let minimumPreviewHeight = 360.0
@@ -511,7 +512,6 @@ private struct SingleFrameReviewView: View {
             }
             Spacer()
             filterPicker
-            Button("Reveal Selected") { model.revealSelectedFrame() }
         }
     }
 
@@ -551,39 +551,16 @@ private struct SingleFrameReviewView: View {
 
     private func inspector(height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(frame.filename)
-                .font(.headline)
-            Text(captureLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            inspectorHeader
 
             Divider()
             decisionControls
 
             Divider()
-            cameraAFControls
-
-            Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
-                model.beginPickingInspectionPoint()
-            }
-            .buttonStyle(.bordered)
-
-            if model.inspectionSource != nil {
-                Button("Clear inspection target") { model.clearInspectionPoint() }
-                    .buttonStyle(.link)
-            }
-
-            Text(inspectionHint)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            focusAssistance
 
             Spacer(minLength: 8)
+            safetyHint
             CullLibraryStatisticsInspector(model: model)
         }
         .frame(width: 230, alignment: .leading)
@@ -592,21 +569,83 @@ private struct SingleFrameReviewView: View {
 
     @ViewBuilder
     private var decisionControls: some View {
-        if model.isKeeping(frame.url) {
-            Button("Kept — undo") { model.clearSelectedFrameDisposition() }
-                .buttonStyle(.borderedProminent)
-        } else {
-            Button("Keep") { model.keepSelectedFrame() }
-                .buttonStyle(.borderedProminent)
-        }
+        HStack(spacing: 7) {
+            Button(model.isKeeping(frame.url) ? "Kept" : "Keep") {
+                model.isKeeping(frame.url) ? model.clearSelectedFrameDisposition() : model.keepSelectedFrame()
+            }
+            .buttonStyle(.borderedProminent)
 
-        if model.isRejecting(frame.url) {
-            Button("Rejected — undo") { model.clearSelectedFrameDisposition() }
+            Button(model.isRejecting(frame.url) ? "Rejected" : "Reject") {
+                model.isRejecting(frame.url) ? model.clearSelectedFrameDisposition() : model.rejectSelectedFrame()
+            }
+            .buttonStyle(.bordered)
+
+            if model.canUndoLastMove {
+                Button { model.undoLastMove() } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
                 .buttonStyle(.bordered)
-        } else {
-            Button("Reject") { model.rejectSelectedFrame() }
-                .buttonStyle(.bordered)
+                .help("Undo latest cull move")
+                .accessibilityLabel("Undo latest cull move")
+            }
         }
+        .disabled(model.isMoving)
+    }
+
+    private var inspectorHeader: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(frame.filename)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(captureLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button { model.revealSelectedFrame() } label: {
+                Label("Reveal", systemImage: "folder")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Reveal selected photo in Finder")
+        }
+    }
+
+    private var focusAssistance: some View {
+        DisclosureGroup(isExpanded: $isFocusAssistanceExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                cameraAFControls
+                Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
+                    isFocusAssistanceExpanded = true
+                    model.beginPickingInspectionPoint()
+                }
+                .buttonStyle(.bordered)
+
+                if model.inspectionSource != nil {
+                    Button("Clear inspection target") { model.clearInspectionPoint() }
+                        .buttonStyle(.link)
+                }
+            }
+            .padding(.top, 2)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Focus assistance", systemImage: "viewfinder")
+                    .font(.caption.weight(.semibold))
+                Text(inspectionHint)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var safetyHint: some View {
+        Image(systemName: "info.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
+            .accessibilityLabel("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
     }
 
     @ViewBuilder
@@ -754,6 +793,7 @@ private struct BurstReviewView: View {
     @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
     @State private var previewHeightAtDragStart: Double?
     @State private var viewport = CullPreviewViewport()
+    @State private var isFocusAssistanceExpanded = false
 
     private let defaultPreviewHeight = 540.0
     private let minimumPreviewHeight = 360.0
@@ -937,8 +977,6 @@ private struct BurstReviewView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Reveal Selected") { model.revealSelectedFrame() }
-                .disabled(selectedFrame == nil)
         }
     }
 
@@ -971,80 +1009,129 @@ private struct BurstReviewView: View {
 
     private func frameInspector(for frame: CullPhoto, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(frame.filename)
-                .font(.headline)
-            Text(captureLabel(frame))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            inspectorHeader(for: frame)
 
             Divider()
-
-            Button(model.isKeeping(frame.url) ? "Kept — undo" : "Keep") {
-                model.toggleKeeping(frame.url)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isMoving)
-
-            Button(model.isRejecting(frame.url) ? "Rejected — undo" : "Reject") {
-                model.toggleRejecting(frame.url)
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.isMoving)
+            decisionControls(for: frame)
 
             Divider()
-
-            if model.isLoadingCameraAFTarget(for: frame.url) {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Reading camera AF data…")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            } else if let target = model.cameraAFTarget(for: frame.url) {
-                Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                if !model.isUsingCameraAFTarget {
-                    Button("Use camera AF target") {
-                        model.useCameraAFTarget()
-                    }
-                    .buttonStyle(.bordered)
-                }
-            } else if model.hasLoadedCameraAFTarget(for: frame.url) {
-                Text("No active camera AF target recorded")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
-                model.beginPickingInspectionPoint()
-            }
-            .buttonStyle(.bordered)
-
-            if model.inspectionSource != nil {
-                Button("Clear inspection target") {
-                    model.clearInspectionPoint()
-                }
-                .buttonStyle(.link)
-            }
-
-            Text(inspectionHint(for: model))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            focusAssistance(for: frame)
 
             Spacer(minLength: 8)
-
+            safetyHint
             CullLibraryStatisticsInspector(model: model)
         }
         .frame(width: 230, alignment: .leading)
         .frame(minHeight: height, maxHeight: height, alignment: .topLeading)
+    }
+
+    private func inspectorHeader(for frame: CullPhoto) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(frame.filename)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(captureLabel(frame))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button { model.revealSelectedFrame() } label: {
+                Label("Reveal", systemImage: "folder")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Reveal selected photo in Finder")
+        }
+    }
+
+    private func decisionControls(for frame: CullPhoto) -> some View {
+        HStack(spacing: 7) {
+            Button(model.isKeeping(frame.url) ? "Kept" : "Keep") {
+                model.toggleKeeping(frame.url)
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button(model.isRejecting(frame.url) ? "Rejected" : "Reject") {
+                model.toggleRejecting(frame.url)
+            }
+            .buttonStyle(.bordered)
+
+            if model.canUndoLastMove {
+                Button { model.undoLastMove() } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .buttonStyle(.bordered)
+                .help("Undo latest cull move")
+                .accessibilityLabel("Undo latest cull move")
+            }
+        }
+        .disabled(model.isMoving)
+    }
+
+    private func focusAssistance(for frame: CullPhoto) -> some View {
+        DisclosureGroup(isExpanded: $isFocusAssistanceExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                cameraAFControls(for: frame)
+                Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
+                    isFocusAssistanceExpanded = true
+                    model.beginPickingInspectionPoint()
+                }
+                .buttonStyle(.bordered)
+
+                if model.inspectionSource != nil {
+                    Button("Clear inspection target") {
+                        model.clearInspectionPoint()
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+            .padding(.top, 2)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Focus assistance", systemImage: "viewfinder")
+                    .font(.caption.weight(.semibold))
+                Text(inspectionHint(for: model))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cameraAFControls(for frame: CullPhoto) -> some View {
+        if model.isLoadingCameraAFTarget(for: frame.url) {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Reading camera AF data…")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else if let target = model.cameraAFTarget(for: frame.url) {
+            Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if !model.isUsingCameraAFTarget {
+                Button("Use camera AF target") {
+                    model.useCameraAFTarget()
+                }
+                .buttonStyle(.bordered)
+            }
+        } else if model.hasLoadedCameraAFTarget(for: frame.url) {
+            Text("No active camera AF target recorded")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var safetyHint: some View {
+        Image(systemName: "info.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
+            .accessibilityLabel("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
     }
 
     private var compactReviewContent: some View {

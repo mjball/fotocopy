@@ -50,7 +50,9 @@ struct LibraryImageStatisticsHeader: View {
 }
 
 /// Uses the blank lower section of the Full Cull inspector so the live totals
-/// remain available while the preview keeps its existing vertical room.
+/// remain available while the preview keeps its existing vertical room. A
+/// distribution bar makes the state of a large library immediately scannable
+/// without repeating a tall, chart-like list beside the photo.
 struct CullLibraryStatisticsInspector: View {
     @Bindable var model: CullViewModel
 
@@ -64,9 +66,10 @@ struct CullLibraryStatisticsInspector: View {
                     Text("\(statistics.totalImageCount.formatted()) images · \(ByteCountFormatter.string(fromByteCount: Int64(statistics.totalByteCount), countStyle: .file))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 8) {
+                    distributionBar(statistics: statistics)
+                    HStack(alignment: .top, spacing: 7) {
                         ForEach(LibraryImageReviewState.allCases, id: \.self) { state in
-                            bucket(for: state, statistics: statistics)
+                            bucketSummary(for: state, statistics: statistics)
                         }
                     }
                 }
@@ -88,24 +91,46 @@ struct CullLibraryStatisticsInspector: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func bucket(for state: LibraryImageReviewState, statistics: LibraryImageStatistics) -> some View {
+    private func distributionBar(statistics: LibraryImageStatistics) -> some View {
+        GeometryReader { proxy in
+            let statesWithImages = LibraryImageReviewState.allCases.filter {
+                statistics.bucket(for: $0).imageCount > 0
+            }
+            let spacing = CGFloat(max(statesWithImages.count - 1, 0))
+            let availableWidth = max(proxy.size.width - spacing, 0)
+
+            HStack(spacing: 1) {
+                ForEach(statesWithImages, id: \.self) { state in
+                    let proportion = Double(statistics.bucket(for: state).imageCount) / Double(max(statistics.totalImageCount, 1))
+                    Capsule()
+                        .fill(color(for: state))
+                        .frame(width: availableWidth * proportion)
+                }
+            }
+        }
+        .frame(height: 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Library decision distribution")
+        .accessibilityValue(
+            LibraryImageReviewState.allCases.map {
+                "\($0.title) \(statistics.percentage(for: $0)) percent"
+            }.joined(separator: ", ")
+        )
+    }
+
+    private func bucketSummary(for state: LibraryImageReviewState, statistics: LibraryImageStatistics) -> some View {
         let bucket = statistics.bucket(for: state)
         return VStack(alignment: .leading, spacing: 2) {
-            Text(state.title)
+            Label(state.title, systemImage: symbolName(for: state))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(color(for: state))
+                .lineLimit(1)
             Text("\(bucket.imageCount.formatted()) · \(statistics.percentage(for: state))%")
-                .font(.caption.weight(.semibold))
-            Text(ByteCountFormatter.string(fromByteCount: Int64(bucket.byteCount), countStyle: .file))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
         }
-        .padding(.leading, 7)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(color(for: state))
-                .frame(width: 2)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("\(ByteCountFormatter.string(fromByteCount: Int64(bucket.byteCount), countStyle: .file))")
     }
 }
 
