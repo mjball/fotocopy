@@ -26,7 +26,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point. When a selected frame records an active target, Fotocopy automatically activates the matching crop comparison while preserving a manual point if you chose one.
 - Provides keyboard-driven review: left/right arrows navigate frames and cross to the previous or next date folder only from the outer review edges; up/down traverse review groups in sidebar order (bursts followed by Single frames), keeping the selected group visible; `⌘[`/`⌘]` also move between date folders with CR3s; `K`/`X` keep or reject the current frame; `⇧K` keeps the current burst frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
 - Applies choices immediately by moving the CR3 and its paired XMP/ON1 sidecars into `Keeps` or `Rejects`. The latest move can be undone, and a later scan or relaunch restores the decision badges from the folder structure.
-- Shows a live, whole-library summary in the Full-layout inspector: image count and storage split between unrated, kept, and rejected photos. Keep, Reject, and Undo update the summary immediately; **Rescan** refreshes it after external Finder changes.
+- Shows a live, compact whole-library distribution in the Full-layout inspector: total image count and storage plus the unrated, kept, and rejected split. Keep, Reject, and Undo update it immediately; **Rescan** refreshes it after external Finder changes. The inspector also keeps a one-click **Reveal** action for the selected photo in Finder.
 
 ### Review and clean up a whole library
 
