@@ -36,10 +36,7 @@ struct CullWorkspaceView: View {
         } else if model.destination == .singleFrames, let frame = model.selectedSingleFrame {
             SingleFrameReviewView(frame: frame, model: model, layout: layout)
         } else if model.destination == .singleFrames, model.scanResult != nil {
-            ContentUnavailableView(
-                "No \(model.singleFrameFilter.title.lowercased()) single frames",
-                systemImage: "checkmark.circle",
-                description: Text("Choose another filter to revisit your decisions, or rescan after changing files in Finder."))
+            SingleFrameReviewEmptyState(model: model, layout: layout)
         } else if let scan = model.scanResult, scan.cr3Count == 0 {
             ContentUnavailableView(
                 "No CR3 files in this folder",
@@ -63,6 +60,112 @@ struct CullWorkspaceView: View {
         }
     }
 
+}
+
+/// The single-frame filter remains visible after a focused queue is exhausted,
+/// so a photographer can immediately revisit the decisions they just made.
+private struct SingleFrameReviewEmptyState: View {
+    @Bindable var model: CullViewModel
+    let layout: CullReviewLayout
+
+    var body: some View {
+        Group {
+            switch layout {
+            case .browse:
+                VStack(alignment: .leading, spacing: 16) {
+                    standardHeader
+                    Spacer()
+                    emptyState
+                    Spacer()
+                }
+                .padding(24)
+            case .review:
+                VStack(spacing: 10) {
+                    compactHeader
+                    Spacer()
+                    emptyState
+                    Spacer()
+                }
+                .padding(.vertical, 12)
+            case .focus:
+                ZStack {
+                    Color.black
+                    VStack(spacing: 0) {
+                        compactHeader
+                            .padding(.top, 12)
+                            .padding(.bottom, 24)
+                            .background(
+                                LinearGradient(
+                                    colors: [.black.opacity(0.76), .clear],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        Spacer()
+                        emptyState
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
+            }
+        }
+    }
+
+    private var progressLabel: String {
+        "\(model.scanResult?.singleFrames.count ?? 0) frames · \(model.undecidedSingleFrameCount) undecided"
+    }
+
+    private var standardHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Single frames")
+                    .font(.title3.weight(.semibold))
+                Text(progressLabel)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            SingleFrameFilterPicker(model: model)
+        }
+    }
+
+    private var compactHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Single frames")
+                    .font(.headline)
+                Text(progressLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            SingleFrameFilterPicker(model: model)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "No \(model.singleFrameFilter.title.lowercased()) single frames",
+            systemImage: "checkmark.circle",
+            description: Text("Choose another filter above to revisit your decisions, or rescan after changing files in Finder."))
+    }
+}
+
+private struct SingleFrameFilterPicker: View {
+    @Bindable var model: CullViewModel
+
+    var body: some View {
+        Picker("Single-frame filter", selection: $model.singleFrameFilter) {
+            ForEach(SingleFrameReviewFilter.allCases) { filter in
+                Text(filter.title).tag(filter)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .onChange(of: model.singleFrameFilter) {
+            model.selectFirstSingleFrameMatchingFilter()
+        }
+    }
 }
 
 /// These sections live in Fotocopy's single app sidebar. Keeping the burst
@@ -421,16 +524,7 @@ private struct SingleFrameReviewView: View {
     }
 
     private var filterPicker: some View {
-        Picker("Single-frame filter", selection: $model.singleFrameFilter) {
-            ForEach(SingleFrameReviewFilter.allCases) { filter in
-                Text(filter.title).tag(filter)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .onChange(of: model.singleFrameFilter) {
-            model.selectFirstSingleFrameMatchingFilter()
-        }
+        SingleFrameFilterPicker(model: model)
     }
 
     private var preview: some View {
