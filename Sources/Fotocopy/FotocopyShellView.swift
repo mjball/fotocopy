@@ -119,11 +119,9 @@ struct FotocopyShellView: View {
         .onChange(of: workspaceRaw) { previousRawValue, currentRawValue in
             synchronizeSidebarSelectionWithWorkspace()
         }
-        .onChange(of: cullModel.selectedBurstID) { _, burstID in
-            guard workspace == .cullBursts,
-                  cullModel.destination == .bursts,
-                  let burstID else { return }
-            sidebarSelection = .burst(burstID)
+        .onChange(of: cullModel.selectedReviewGroupID) { _, groupID in
+            guard workspace == .cullBursts, let groupID else { return }
+            sidebarSelection = sidebarDestination(for: groupID)
         }
         .onChange(of: cullReviewLayout) { _, layout in
             sidebarVisibility = layout == .browse ? .all : .detailOnly
@@ -157,8 +155,8 @@ struct FotocopyShellView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 210, ideal: 255, max: 340)
-            .task(id: cullModel.selectedBurstID) {
-                await scrollSelectedBurstIntoView(cullModel.selectedBurstID, using: proxy)
+            .task(id: cullModel.selectedReviewGroupID) {
+                await scrollSelectedReviewGroupIntoView(cullModel.selectedReviewGroupID, using: proxy)
             }
         }
     }
@@ -181,9 +179,7 @@ struct FotocopyShellView: View {
         switch selection {
         case .burst(let burstID):
             workspace = .cullBursts
-            cullModel.destination = .bursts
-            cullModel.selectedBurstID = burstID
-            cullModel.syncSelectedFrame()
+            cullModel.selectReviewGroup(withID: .burst(burstID))
         case .singleFrames:
             workspace = .cullBursts
             cullModel.showSingleFrameCulling()
@@ -193,12 +189,8 @@ struct FotocopyShellView: View {
     private func synchronizeSidebarSelectionWithWorkspace() {
         let storedWorkspace = workspace
         if storedWorkspace == .cullBursts {
-            if cullModel.destination == .singleFrames {
-                sidebarSelection = .singleFrames
-                return
-            }
-            if let burstID = cullModel.selectedBurstID {
-                sidebarSelection = .burst(burstID)
+            if let groupID = cullModel.selectedReviewGroupID {
+                sidebarSelection = sidebarDestination(for: groupID)
                 return
             }
         }
@@ -206,13 +198,23 @@ struct FotocopyShellView: View {
     }
 
     /// Mirror vertical keyboard navigation in the sidebar so the selected
-    /// burst remains visible while photographers review a long shoot.
-    private func scrollSelectedBurstIntoView(_ burstID: URL?, using proxy: ScrollViewProxy) async {
-        guard let burstID, workspace == .cullBursts else { return }
+    /// review group remains visible while photographers review a long shoot.
+    private func scrollSelectedReviewGroupIntoView(
+        _ groupID: CullReviewGroupID?,
+        using proxy: ScrollViewProxy
+    ) async {
+        guard let groupID, workspace == .cullBursts else { return }
         await Task.yield()
-        guard !Task.isCancelled, cullModel.selectedBurstID == burstID else { return }
+        guard !Task.isCancelled, cullModel.selectedReviewGroupID == groupID else { return }
         withAnimation(.easeInOut(duration: 0.16)) {
-            proxy.scrollTo(burstID, anchor: .center)
+            proxy.scrollTo(sidebarDestination(for: groupID), anchor: .center)
+        }
+    }
+
+    private func sidebarDestination(for groupID: CullReviewGroupID) -> FotocopySidebarDestination {
+        switch groupID {
+        case let .burst(burstID): .burst(burstID)
+        case .singleFrames: .singleFrames
         }
     }
 

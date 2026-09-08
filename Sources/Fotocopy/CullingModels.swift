@@ -242,17 +242,34 @@ enum CullReviewLayout: String, CaseIterable, Identifiable {
     }
 }
 
-/// Cull has focused per-day burst and single-frame review plus a library-wide,
-/// filesystem-backed decision review. Neither owns a separate photo catalog.
+/// Cull has focused per-day review plus a library-wide, filesystem-backed
+/// decision review. Neither owns a separate photo catalog.
 enum CullDestination: Hashable {
-    case bursts
-    case singleFrames
+    case review(CullReviewGroupID?)
     case libraryDecisions
 }
 
-/// Singles are a review queue, not miniature bursts. The filter controls the
-/// thumbnails presented to the photographer; decisions remain derived from the
-/// files' locations.
+/// A review group is the unit selected by the sidebar and vertical navigation.
+/// Standalone photos deliberately form one virtual group, so they participate
+/// in selection and folder transitions exactly like a burst without gaining
+/// burst-only batch actions.
+enum CullReviewGroupID: Hashable {
+    case burst(URL)
+    case singleFrames
+}
+
+struct CullReviewGroup: Identifiable {
+    let id: CullReviewGroupID
+    let frames: [CullPhoto]
+
+    var supportsBurstActions: Bool {
+        if case .burst = id { return true }
+        return false
+    }
+}
+
+/// Singles are a review queue. The filter controls the thumbnails presented to
+/// the photographer; decisions remain derived from the files' locations.
 enum SingleFrameReviewFilter: String, CaseIterable, Identifiable {
     case undecided
     case all
@@ -304,6 +321,68 @@ enum CullSingleFrameNavigation {
 
 /// Burst navigation mirrors frame navigation: the endpoints deliberately do
 /// not wrap, so an up/down press never jumps to a distant shoot.
+enum CullReviewGroupNavigation {
+    static func groupID(
+        in groups: [CullReviewGroup],
+        adjacentTo selectedGroupID: CullReviewGroupID?,
+        offset: Int
+    ) -> CullReviewGroupID? {
+        guard !groups.isEmpty else { return nil }
+        guard offset != 0 else { return selectedGroupID ?? groups.first?.id }
+
+        let currentIndex = groups.firstIndex { $0.id == selectedGroupID } ?? 0
+        let nextIndex = min(max(currentIndex + offset, 0), groups.count - 1)
+        return groups[nextIndex].id
+    }
+
+    /// Keep the same kind of group when crossing folders. A burst identifier
+    /// cannot survive a date-folder change, so any burst is the natural peer.
+    static func initialGroupID(
+        in groups: [CullReviewGroup],
+        preferring preferredGroupID: CullReviewGroupID?,
+        selectingLastReviewGroup: Bool = false
+    ) -> CullReviewGroupID? {
+        guard !groups.isEmpty else { return nil }
+        if selectingLastReviewGroup { return groups.last?.id }
+        guard let preferredGroupID else { return groups.first?.id }
+        if groups.contains(where: { $0.id == preferredGroupID }) { return preferredGroupID }
+
+        switch preferredGroupID {
+        case .burst:
+            return groups.first { $0.supportsBurstActions }?.id ?? groups.first?.id
+        case .singleFrames:
+            return groups.first { $0.id == .singleFrames }?.id ?? groups.first?.id
+        }
+    }
+
+    /// Left/right leave a date only at the outer edge of the visible review
+    /// sequence. A narrowed Singles filter therefore behaves as its own
+    /// review queue while preserving the same date-navigation contract.
+    static func crossesFolderBoundary(
+        in groups: [CullReviewGroup],
+        selectedGroupID: CullReviewGroupID?,
+        visibleFrames: [CullPhoto],
+        selectedFrameURL: URL?,
+        offset: Int
+    ) -> Bool {
+        guard let selectedGroupID,
+              let selectedFrameURL,
+              !visibleFrames.isEmpty else {
+            return false
+        }
+
+        if offset < 0 {
+            return groups.first?.id == selectedGroupID && visibleFrames.first?.url == selectedFrameURL
+        }
+        if offset > 0 {
+            return groups.last?.id == selectedGroupID && visibleFrames.last?.url == selectedFrameURL
+        }
+        return false
+    }
+}
+
+/// Burst batch decisions advance within bursts only; review-group navigation
+/// is intentionally broader and can also move to the Singles group.
 enum CullBurstNavigation {
     static func burstID(
         in bursts: [PhotoBurst],
@@ -373,6 +452,16 @@ struct CullFolderScan: Sendable {
     let bursts: [PhotoBurst]
     let singleFrames: [CullPhoto]
     let duration: TimeInterval
+}
+
+extension CullFolderScan {
+    /// Sidebar order is also vertical review order: bursts first, then the
+    /// standalone-photo group that is already shown beneath them in the UI.
+    var reviewGroups: [CullReviewGroup] {
+        let burstGroups = bursts.map { CullReviewGroup(id: .burst($0.id), frames: $0.frames) }
+        guard !singleFrames.isEmpty else { return burstGroups }
+        return burstGroups + [CullReviewGroup(id: .singleFrames, frames: singleFrames)]
+    }
 }
 
 struct CullScanProgress: Sendable {

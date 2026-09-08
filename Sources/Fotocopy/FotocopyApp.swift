@@ -166,6 +166,13 @@ private struct CullCommands: Commands {
             !model.isMoving
     }
 
+    private var canReviewGroup: Bool {
+        isCullActive &&
+            model.selectedReviewGroup != nil &&
+            !model.isScanning &&
+            !model.isMoving
+    }
+
     private var canReviewFrame: Bool {
         isCullActive &&
             model.selectedFrameURL != nil &&
@@ -240,17 +247,17 @@ private struct CullCommands: Commands {
             .keyboardShortcut(.rightArrow, modifiers: [])
             .disabled(!canReviewFrame)
 
-            Button("Previous Burst") {
-                model.moveSelectedBurst(by: -1)
+            Button("Previous Review Group") {
+                model.moveSelectedReviewGroup(by: -1)
             }
             .keyboardShortcut(.upArrow, modifiers: [])
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewGroup)
 
-            Button("Next Burst") {
-                model.moveSelectedBurst(by: 1)
+            Button("Next Review Group") {
+                model.moveSelectedReviewGroup(by: 1)
             }
             .keyboardShortcut(.downArrow, modifiers: [])
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewGroup)
 
             Divider()
 
@@ -337,7 +344,7 @@ private struct CullCommands: Commands {
     }
 
     private func moveFrame(by offset: Int) {
-        if model.destination == .singleFrames {
+        if model.isReviewingSingles {
             model.moveSelectedSingleFrame(by: offset)
         } else if let selectedBurst {
             model.moveSelectedFrame(in: selectedBurst, by: offset)
