@@ -284,8 +284,14 @@ private struct SingleFrameReviewView: View {
     let frame: CullPhoto
     @Bindable var model: CullViewModel
     let layout: CullReviewLayout
+    @AppStorage(PreferenceKeys.cullPreviewHeight) private var previewHeight = 540.0
     @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
+    @State private var previewHeightAtDragStart: Double?
     @State private var viewport = CullPreviewViewport()
+
+    private let defaultPreviewHeight = 540.0
+    private let minimumPreviewHeight = 360.0
+    private let maximumPreviewHeight = 1_200.0
 
     private var visibleFrames: [CullPhoto] { model.filteredSingleFrames }
 
@@ -333,9 +339,17 @@ private struct SingleFrameReviewView: View {
             standardHeader
             HStack(alignment: .top, spacing: 18) {
                 preview
-                    .frame(maxWidth: .infinity, minHeight: 540, maxHeight: 540)
-                inspector
+                    .frame(maxWidth: .infinity, minHeight: resolvedPreviewHeight, maxHeight: resolvedPreviewHeight)
+                inspector(height: resolvedPreviewHeight)
             }
+            CullPreviewHeightResizeHandle(
+                onChanged: resizePreview,
+                onEnded: { previewHeightAtDragStart = nil },
+                onReset: {
+                    previewHeight = defaultPreviewHeight
+                    previewHeightAtDragStart = nil
+                }
+            )
             filmstrip
             moveStatus
         }
@@ -432,7 +446,7 @@ private struct SingleFrameReviewView: View {
         .background(.black, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private var inspector: some View {
+    private func inspector(height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(frame.filename)
                 .font(.headline)
@@ -470,7 +484,7 @@ private struct SingleFrameReviewView: View {
             CullLibraryStatisticsInspector(model: model)
         }
         .frame(width: 230, alignment: .leading)
-        .frame(minHeight: 540, maxHeight: 540, alignment: .topLeading)
+        .frame(minHeight: height, maxHeight: height, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -606,6 +620,26 @@ private struct SingleFrameReviewView: View {
         if model.isPickingInspectionPoint { return "Click the subject detail you want to inspect." }
         if model.isUsingCameraAFTarget { return "Uses this frame’s camera-recorded AF target." }
         return "Use a camera AF target or pick a detail manually. Fotocopy never chooses or discards a photo for you."
+    }
+
+    private func resizePreview(by translation: CGFloat) {
+        if previewHeightAtDragStart == nil {
+            previewHeightAtDragStart = previewHeight
+        }
+        let startingHeight = previewHeightAtDragStart ?? previewHeight
+        previewHeight = min(
+            max(startingHeight + Double(translation), minimumPreviewHeight),
+            maximumPreviewHeight
+        )
+    }
+
+    private var resolvedPreviewHeight: CGFloat {
+        CGFloat(
+            min(
+                max(previewHeight, minimumPreviewHeight),
+                maximumPreviewHeight
+            )
+        )
     }
 }
 
