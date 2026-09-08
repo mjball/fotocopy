@@ -19,7 +19,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 ### Cull Canon CR3 bursts and single frames
 
 - Scans a chosen date folder and its `Keeps`/`Rejects` subfolders to rebuild conservative consecutive-capture bursts and identify standalone frames from the files on disk.
-- Opens standalone frames as their own review queue, with Undecided, All, Kept, and Rejected filters, a progress count, thumbnails, and the same immediate Keep/Reject and Undo workflow as burst review.
+- Opens standalone frames as their own review timeline, showing all thumbnails and their Keep/Reject badges by default while advancing decisions to the next undecided photo. Undecided, Kept, and Rejected filters remain available for focused review, alongside the same immediate Keep/Reject and Undo workflow as burst review.
 - Displays fast embedded JPEG previews, with full-resolution preview loading when you zoom; pinch, double-click, and pan directly in the main viewer. The Frames filmstrip and active detail-crop strip follow the selected frame during keyboard navigation.
 - In Full review, drag the handle below the main preview to allocate more vertical space to the photo; the chosen height is shared by burst and single-frame review and can be reset with a double-click.
 - Offers Full, Compact, and Minimal review layouts, plus a filmstrip, per-frame Keep/Reject badges, and filesystem-derived burst status: no icon before a decision, an outlined green check after a keep or outlined red X after rejects only while review is in progress, then a filled green check when the finished burst has a keeper or a filled red X when every frame is rejected.

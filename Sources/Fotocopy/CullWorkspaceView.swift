@@ -1898,7 +1898,9 @@ final class CullViewModel {
     private(set) var nextCullFolderURL: URL?
     var selectedBurstID: URL?
     var selectedFrameURL: URL?
-    var singleFrameFilter: SingleFrameReviewFilter = .undecided
+    /// Singles open as a visual timeline. Keep/Reject moves selection to the
+    /// next undecided photo but leaves its decided thumbnail visible.
+    var singleFrameFilter: SingleFrameReviewFilter = .all
     var inspectionSource: CullInspectionSource?
     var isPickingInspectionPoint = false
     var libraryDecisionScan: CullLibraryDecisionScan?
@@ -2752,9 +2754,9 @@ final class CullViewModel {
         )
     }
 
-    /// Advance through the active filter after a single-frame decision. It
-    /// wraps only to locate another matching frame; when no frame matches, the
-    /// empty-state confirms that this queue is complete.
+    /// In the default All timeline, a decision advances past marked thumbnails
+    /// to the next undecided photo. A narrowed filter instead advances within
+    /// that filter so a photographer can deliberately review prior choices.
     private func advanceToNextSingleFrame(after sourceURL: URL, replacements: [URL: URL]) {
         guard destination == .singleFrames,
               let allFrames = scanResult?.singleFrames,
@@ -2769,18 +2771,28 @@ final class CullViewModel {
             return
         }
 
-        for offset in 1...allFrames.count {
-            let candidate = allFrames[(currentIndex + offset) % allFrames.count]
-            if singleFrameFilter.includes(dispositions[candidate.url]) {
-                selectedFrameURL = candidate.url
-                inspectionSource = nil
-                isPickingInspectionPoint = false
-                automaticallyUseCameraAFTargetForSelectedFrame()
-                return
+        let nextFrameURL = CullSingleFrameNavigation.nextFrameURL(
+            in: allFrames,
+            adjacentTo: currentURL
+        ) { candidate in
+            if singleFrameFilter == .all {
+                return dispositions[candidate.url] == nil
             }
+            return singleFrameFilter.includes(dispositions[candidate.url])
         }
 
-        selectedFrameURL = nil
+        if let nextFrameURL {
+            selectedFrameURL = nextFrameURL
+            inspectionSource = nil
+            isPickingInspectionPoint = false
+            automaticallyUseCameraAFTargetForSelectedFrame()
+            return
+        }
+
+        // All remains visible even after every photo is decided, so retain the
+        // final selection for a last confirmation rather than showing an empty
+        // queue. Narrow filters retain their existing empty-state behavior.
+        selectedFrameURL = singleFrameFilter == .all ? currentURL : nil
         inspectionSource = nil
         isPickingInspectionPoint = false
     }

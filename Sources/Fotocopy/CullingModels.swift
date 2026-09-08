@@ -250,9 +250,9 @@ enum CullDestination: Hashable {
     case libraryDecisions
 }
 
-/// Singles are a review queue, not miniature bursts. The filter controls both
-/// the thumbnails presented to the photographer and where Keep/Reject advances
-/// next; decisions themselves remain derived from the files' locations.
+/// Singles are a review queue, not miniature bursts. The filter controls the
+/// thumbnails presented to the photographer; decisions remain derived from the
+/// files' locations.
 enum SingleFrameReviewFilter: String, CaseIterable, Identifiable {
     case undecided
     case all
@@ -277,6 +277,28 @@ enum SingleFrameReviewFilter: String, CaseIterable, Identifiable {
         case .kept: return disposition == .select
         case .rejected: return disposition == .reject
         }
+    }
+}
+
+/// Decision actions can advance past already-marked singles while leaving those
+/// thumbnails present in the review strip for immediate visual confirmation or
+/// correction. The search wraps once so a photographer can resume anywhere.
+enum CullSingleFrameNavigation {
+    static func nextFrameURL(
+        in frames: [CullPhoto],
+        adjacentTo selectedURL: URL?,
+        matching predicate: (CullPhoto) -> Bool
+    ) -> URL? {
+        guard !frames.isEmpty else { return nil }
+        let currentIndex = frames.firstIndex { $0.url == selectedURL } ?? 0
+
+        for offset in 1...frames.count {
+            let candidate = frames[(currentIndex + offset) % frames.count]
+            if predicate(candidate) {
+                return candidate.url
+            }
+        }
+        return nil
     }
 }
 

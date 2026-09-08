@@ -70,6 +70,24 @@ import Testing
     #expect(SingleFrameReviewFilter.all.includes(.reject))
 }
 
+@Test func singleFrameQueueAdvancesPastDecidedThumbnails() {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let kept = makePhoto(number: 1, at: start, disposition: .select)
+    let rejected = makePhoto(number: 2, at: start.addingTimeInterval(1), disposition: .reject)
+    let undecided = makePhoto(number: 3, at: start.addingTimeInterval(2))
+
+    #expect(CullSingleFrameNavigation.nextFrameURL(
+        in: [kept, rejected, undecided],
+        adjacentTo: kept.url,
+        matching: { $0.disposition == nil }
+    ) == undecided.url)
+    #expect(CullSingleFrameNavigation.nextFrameURL(
+        in: [kept, rejected],
+        adjacentTo: kept.url,
+        matching: { $0.disposition == nil }
+    ) == nil)
+}
+
 @Test func collisionSuffixUsesOriginalCameraSequenceNumber() {
     #expect(BurstGroupingEngine.sequenceNumber(in: URL(fileURLWithPath: "/tmp/BL5A2496_1.CR3")) == 2496)
     #expect(BurstGroupingEngine.sequenceNumber(in: URL(fileURLWithPath: "/tmp/IMG_7422.CR3")) == 7422)
@@ -357,14 +375,19 @@ import Testing
     #expect(CanonAFMetadataReader.target(from: Data([0, 0, 0, 12, 0x43, 0x4d, 0x54, 0x33])) == nil)
 }
 
-private func makePhoto(number: Int, at date: Date) -> CullPhoto {
+private func makePhoto(
+    number: Int,
+    at date: Date,
+    disposition: CullDisposition? = nil
+) -> CullPhoto {
     let filename = "BL5A\(number).CR3"
     return CullPhoto(
         url: URL(fileURLWithPath: "/tmp/\(filename)"),
         filename: filename,
         captureDate: date,
         dateSource: .exif,
-        sequenceNumber: number
+        sequenceNumber: number,
+        disposition: disposition
     )
 }
 
