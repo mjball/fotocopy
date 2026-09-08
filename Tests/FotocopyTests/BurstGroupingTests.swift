@@ -2,6 +2,17 @@ import Foundation
 import Testing
 @testable import Fotocopy
 
+@Test func previewViewportDoubleClickTogglesFitAndMaximumZoom() {
+    #expect(CullPreviewViewport.zoomAfterDoubleClick(from: CullPreviewViewport.minimumZoom) == CullPreviewViewport.maximumZoom)
+    #expect(CullPreviewViewport.zoomAfterDoubleClick(from: 2) == CullPreviewViewport.minimumZoom)
+    #expect(CullPreviewViewport.zoomAfterDoubleClick(from: CullPreviewViewport.maximumZoom) == CullPreviewViewport.minimumZoom)
+}
+
+@Test func previewViewportClampsZoomToSharedBounds() {
+    #expect(CullPreviewViewport(zoom: 0.5).zoom == CullPreviewViewport.minimumZoom)
+    #expect(CullPreviewViewport(zoom: 10).zoom == CullPreviewViewport.maximumZoom)
+}
+
 @Test func consecutiveCapturesBecomeOneBurst() {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let photos = [
