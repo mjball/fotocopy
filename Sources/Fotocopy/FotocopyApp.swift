@@ -167,6 +167,23 @@ struct FotocopyApp: App {
     }
 }
 
+/// Keeps Cull's scan command structurally stable while its label and action
+/// reflect whether a scan is already running.
+enum CullScanMenuCommand {
+    static func title(isScanning: Bool) -> String {
+        isScanning ? "Cancel Scan" : "Rescan"
+    }
+
+    static func isEnabled(
+        isCullActive: Bool,
+        isScanning: Bool,
+        isMoving: Bool,
+        hasFolder: Bool
+    ) -> Bool {
+        isScanning || (isCullActive && hasFolder && !isMoving)
+    }
+}
+
 /// Mirrors Cull's on-screen controls in the macOS menu bar. This makes each
 /// shortcut discoverable without inventing a second, hidden input vocabulary.
 private struct CullCommands: Commands {
@@ -235,17 +252,25 @@ private struct CullCommands: Commands {
             }
             .disabled(!isCullActive || model.isScanning || model.isMoving)
 
-            if model.isScanning {
-                Button("Cancel Scan") {
+            // Keep this as one menu item. Replacing Rescan with Cancel Scan
+            // while AppKit is opening the main menu can leave SwiftUI's menu
+            // representation briefly out of sync with its backing item list.
+            Button(CullScanMenuCommand.title(isScanning: model.isScanning)) {
+                if model.isScanning {
                     model.cancel()
-                }
-            } else {
-                Button("Rescan") {
+                } else {
                     model.scan()
                 }
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(!isCullActive || model.folderURL == nil || model.isMoving)
             }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(
+                !CullScanMenuCommand.isEnabled(
+                    isCullActive: isCullActive,
+                    isScanning: model.isScanning,
+                    isMoving: model.isMoving,
+                    hasFolder: model.folderURL != nil
+                )
+            )
 
             Divider()
 
