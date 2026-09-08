@@ -8,6 +8,28 @@ These rules apply to every change that will be committed or proposed for review.
 
 # Completion and shipping
 
+## Release versioning
+
+Fotocopy uses Chrome-style milestone versioning rather than Semantic Versioning.
+Tags and app bundles use `vM.0.R`, where `M` is the curated product milestone
+and `R` is a release revision within that milestone.
+
+- Start each new curated milestone at `vM.0.0`. A milestone represents a
+  coherent, user-facing product release; it is not a compatibility promise and
+  is not determined by whether a change is breaking.
+- Increment `R` (`v1.0.0` to `v1.0.1`) for fixes, regression recoveries, and
+  other follow-up releases in the current milestone. Ship urgent fixes without
+  waiting for the next milestone.
+- Increment `M` (`v1.0.2` to `v2.0.0`) only when a meaningful set of
+  user-facing improvements merits the next curated release. Do not use version
+  numbers merely as a counter for merged pull requests.
+- The `1.0.0` milestone marks Fotocopy's first stable curated product release;
+  it does not create a SemVer API or data-format compatibility commitment.
+
+This deliberately borrows Chrome's milestone-and-revision release model while
+retaining macOS's three-component bundle version format. Do not adopt
+Chrome's four-component build identifiers for app bundle versions.
+
 For a user-requested product behavior change, presume the request is to ship it
 unless the user explicitly limits the scope to planning, diagnosis, review, or
 an unshipped patch. Do not call the work complete at an intermediate milestone
@@ -19,9 +41,8 @@ steps:
 - run the relevant tests and the temporary release-build verification;
 - update release-facing documentation, commit on a `codex/` branch, open and
   self-review a pull request, then merge it when clean;
-- publish a GitHub release with user-visible release notes, using the next patch
-  version for a backward-compatible fix unless the change clearly needs a
-  different version;
+- publish a GitHub release with user-visible release notes, choosing its
+  version according to the milestone policy above;
 - install the published release into `/Applications/Fotocopy.app` and verify
   its version, code signature, and launch state.
 
