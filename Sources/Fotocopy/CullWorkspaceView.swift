@@ -41,6 +41,11 @@ struct CullWorkspaceView: View {
         } message: {
             Text(model.moveErrorMessage ?? "Unknown error")
         }
+        .alert(model.quickExportAlertTitle, isPresented: $model.showQuickExportAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(model.quickExportAlertMessage)
+        }
     }
 
     @ViewBuilder
@@ -726,8 +731,11 @@ private struct SingleFrameReviewView: View {
                                 }
                             }
                             .overlay {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(model.selectedFrameURL == candidate.url ? Color.accentColor : Color.clear, lineWidth: 3)
+                                CullQuickExportSelectionBorder(
+                                    isFocused: model.selectedFrameURL == candidate.url,
+                                    isSelectedForExport: model.isQuickExportSelected(candidate.url),
+                                    cornerRadius: 6
+                                )
                             }
                         }
                         .buttonStyle(.plain)
@@ -894,8 +902,11 @@ private struct BurstReviewView: View {
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                                     .overlay {
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(model.selectedFrameURL == frame.url ? Color.accentColor : Color.clear, lineWidth: 3)
+                                        CullQuickExportSelectionBorder(
+                                            isFocused: model.selectedFrameURL == frame.url,
+                                            isSelectedForExport: model.isQuickExportSelected(frame.url),
+                                            cornerRadius: 6
+                                        )
                                     }
                                 Text(frame.filename)
                                     .font(.caption2.monospaced())
@@ -1306,8 +1317,11 @@ private struct BurstReviewView: View {
                             }
                         }
                         .overlay {
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(model.selectedFrameURL == frame.url ? Color.accentColor : Color.clear, lineWidth: 3)
+                            CullQuickExportSelectionBorder(
+                                isFocused: model.selectedFrameURL == frame.url,
+                                isSelectedForExport: model.isQuickExportSelected(frame.url),
+                                cornerRadius: 6
+                            )
                         }
                     }
                     .buttonStyle(.plain)
@@ -2002,11 +2016,11 @@ private struct CullInspectionCropSection: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(
-                    model.selectedFrameURL == frame.url ? Color.accentColor : Color.clear,
-                    lineWidth: 3
-                )
+            CullQuickExportSelectionBorder(
+                isFocused: model.selectedFrameURL == frame.url,
+                isSelectedForExport: model.isQuickExportSelected(frame.url),
+                cornerRadius: 7
+            )
         }
     }
 }
@@ -2181,6 +2195,27 @@ private struct CullFrameDispositionState: Sendable {
     let disposition: CullDisposition?
 }
 
+/// Blue identifies the currently reviewed frame; the inset orange border is
+/// the persistent Quick Export selection. Keeping both visible makes it clear
+/// that command-click can select several frames while one remains in focus.
+private struct CullQuickExportSelectionBorder: View {
+    let isFocused: Bool
+    let isSelectedForExport: Bool
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(isFocused ? Color.accentColor : Color.clear, lineWidth: 3)
+            if isSelectedForExport {
+                RoundedRectangle(cornerRadius: max(0, cornerRadius - 2))
+                    .stroke(.orange, lineWidth: 2)
+                    .padding(5)
+            }
+        }
+    }
+}
+
 private struct CullUndoOperation: Sendable {
     let restoreStates: [CullFrameDispositionState]
     let movedFrameCount: Int
@@ -2203,6 +2238,11 @@ final class CullViewModel {
     var isMoving = false
     var movingFrameCount = 0
     var lastMoveSummary: String?
+    var quickExportSelection = Set<URL>()
+    var isQuickExporting = false
+    var quickExportAlertTitle = "Quick Export"
+    var quickExportAlertMessage = ""
+    var showQuickExportAlert = false
     private(set) var previousCullFolderURL: URL?
     private(set) var nextCullFolderURL: URL?
     var selectedFrameURL: URL?
@@ -2287,6 +2327,18 @@ final class CullViewModel {
     }
 
     var canUndoLastMove: Bool { lastUndoOperation != nil && !isMoving }
+
+    var selectedQuickExportURLs: [URL] {
+        let frames = (scanResult?.bursts.flatMap(\.frames) ?? []) + (scanResult?.singleFrames ?? [])
+        let selected = quickExportSelection.isEmpty
+            ? Set(selectedFrameURL.map { [$0] } ?? [])
+            : quickExportSelection
+        return frames.map(\.url).filter(selected.contains)
+    }
+
+    var canQuickExport: Bool {
+        !selectedQuickExportURLs.isEmpty && !isScanning && !isMoving && !isQuickExporting
+    }
 
     var canNavigatePreviousCullFolder: Bool {
         previousCullFolderURL != nil && !isScanning && !isMoving
@@ -2589,6 +2641,7 @@ final class CullViewModel {
         lastMoveSummary = nil
         destination = .review(nil)
         selectedFrameURL = nil
+        quickExportSelection.removeAll()
         inspectionSource = nil
         isPickingInspectionPoint = false
         cameraAFTargets.removeAll()
@@ -2710,6 +2763,7 @@ final class CullViewModel {
         selectedFrameURL = selectingLastFrame
             ? visibleFrames(in: group).last?.url
             : visibleFrames(in: group).first?.url
+        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
         inspectionSource = nil
         isPickingInspectionPoint = false
         automaticallyUseCameraAFTargetForSelectedFrame()
@@ -2717,6 +2771,7 @@ final class CullViewModel {
 
     func selectFrame(_ url: URL) {
         selectedFrameURL = url
+        updateQuickExportSelection(for: url)
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -2724,14 +2779,97 @@ final class CullViewModel {
         guard isReviewingSingles,
               filteredSingleFrames.contains(where: { $0.url == url }) else { return }
         selectedFrameURL = url
+        updateQuickExportSelection(for: url)
         inspectionSource = nil
         isPickingInspectionPoint = false
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
+    /// A normal click begins a new export selection. Command-click retains
+    /// prior frames, matching the Finder convention without changing Cull's
+    /// single-frame preview focus.
+    private func updateQuickExportSelection(for url: URL) {
+        if NSEvent.modifierFlags.contains(.command) {
+            if !quickExportSelection.insert(url).inserted {
+                quickExportSelection.remove(url)
+            }
+        } else {
+            quickExportSelection = [url]
+        }
+    }
+
+    func isQuickExportSelected(_ url: URL) -> Bool {
+        selectedQuickExportURLs.contains(url)
+    }
+
+    func quickExportSelectedPhotos() {
+        let sources = selectedQuickExportURLs
+        guard !sources.isEmpty, !isQuickExporting else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export JPEGs"
+        panel.message = "Choose a folder for \(sources.count) JPEG \(sources.count == 1 ? "export" : "exports"). Fotocopy leaves the original CR3 files unchanged and will not overwrite existing JPEGs."
+        if let savedPath = UserDefaults.standard.string(forKey: PreferenceKeys.lastQuickExportFolder),
+           FileManager.default.fileExists(atPath: savedPath) {
+            panel.directoryURL = URL(fileURLWithPath: savedPath)
+        } else if let source = sources.first {
+            panel.directoryURL = source.deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let destinationFolderURL = panel.url else { return }
+        UserDefaults.standard.set(destinationFolderURL.path, forKey: PreferenceKeys.lastQuickExportFolder)
+        isQuickExporting = true
+
+        Task { [sources, destinationFolderURL] in
+            defer { isQuickExporting = false }
+            do {
+                let plan = try await Task.detached(priority: .userInitiated) {
+                    try QuickExportEngine.makePlan(
+                        sourceURLs: sources,
+                        destinationFolderURL: destinationFolderURL
+                    )
+                }.value
+                let result = await Task.detached(priority: .userInitiated) {
+                    QuickExportEngine.export(plan)
+                }.value
+                guard !Task.isCancelled else { return }
+                presentQuickExportResult(result, destinationFolderURL: destinationFolderURL)
+            } catch {
+                guard !Task.isCancelled else { return }
+                quickExportAlertTitle = "Could not export JPEGs"
+                quickExportAlertMessage = error.localizedDescription
+                showQuickExportAlert = true
+            }
+        }
+    }
+
+    private func presentQuickExportResult(
+        _ result: QuickExportResult,
+        destinationFolderURL: URL
+    ) {
+        let exportedCount = result.exportedURLs.count
+        if result.failures.isEmpty {
+            quickExportAlertTitle = "Quick Export Complete"
+            quickExportAlertMessage = "Exported \(exportedCount) JPEG \(exportedCount == 1 ? "image" : "images") to \(destinationFolderURL.path)."
+        } else {
+            quickExportAlertTitle = exportedCount == 0 ? "Could not export JPEGs" : "Quick Export Partially Complete"
+            let failedNames = result.failures.map { $0.sourceURL.lastPathComponent }.joined(separator: ", ")
+            let successSummary = exportedCount == 0
+                ? ""
+                : "Exported \(exportedCount) JPEG \(exportedCount == 1 ? "image" : "images"). "
+            quickExportAlertMessage = "\(successSummary)Could not export \(failedNames). \(result.failures.first?.message ?? "")"
+        }
+        showQuickExportAlert = true
+    }
+
     func selectFirstSingleFrameMatchingFilter() {
         guard isReviewingSingles else { return }
         selectedFrameURL = filteredSingleFrames.first?.url
+        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
         inspectionSource = nil
         isPickingInspectionPoint = false
     }
@@ -2743,6 +2881,7 @@ final class CullViewModel {
             adjacentTo: selectedFrameURL,
             offset: offset
         )
+        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -2770,6 +2909,7 @@ final class CullViewModel {
             adjacentTo: selectedFrameURL,
             offset: offset
         )
+        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -3287,6 +3427,7 @@ final class CullViewModel {
             destination = .review(.burst(rewrittenURL(selectedBurstID)))
         }
         selectedFrameURL = selectedFrameURL.map(rewrittenURL)
+        quickExportSelection = Set(quickExportSelection.map(rewrittenURL))
         dispositions = rewriteDictionary(dispositions, using: destinationBySource)
         cameraAFTargets = rewriteDictionary(cameraAFTargets, using: destinationBySource)
         loadedCameraAFTargetURLs = Set(loadedCameraAFTargetURLs.map(rewrittenURL))
