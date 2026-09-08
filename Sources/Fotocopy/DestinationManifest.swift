@@ -116,6 +116,14 @@ struct ManifestLoadResult {
     let keys: Set<String>
 }
 
+/// The result of a lightweight search for an existing Fotocopy destination.
+/// It checks manifest paths and a bounded set of directory entries without
+/// reading media contents or metadata.
+struct ManifestRootSearchResult: Sendable, Equatable {
+    let roots: [URL]
+    let reachedDirectoryLimit: Bool
+}
+
 struct DestinationManifestRelocation: Sendable, Hashable {
     let previousRelativePath: String
     let currentRelativePath: String
@@ -171,6 +179,90 @@ struct DestinationManifest {
     static let databaseFilename = "fotocopy-manifest.sqlite"
     static let photosLibraryBucket = "photos-library"
     static let rootBucket = "root"
+
+    /// Looks for existing Fotocopy manifests below a folder without scanning
+    /// its media. This is used when a saved destination has been restored to
+    /// a volume root: finding `/Volume/Fotocopy/metadata/...` should be quick
+    /// even when that volume contains a very large photo library.
+    ///
+    /// The search is intentionally shallow and bounded. A broader recursive
+    /// walk could become the same expensive whole-drive scan this recovery is
+    /// meant to avoid. Callers must not automatically choose a result when
+    /// `reachedDirectoryLimit` is true.
+    static func findExistingManifestRoots(
+        below rootURL: URL,
+        maximumDepth: Int = 3,
+        maximumDirectories: Int = 500
+    ) -> ManifestRootSearchResult {
+        let fileManager = FileManager.default
+        let normalizedRoot = rootURL.standardizedFileURL
+        let maximumDepth = max(0, maximumDepth)
+        let maximumDirectories = max(1, maximumDirectories)
+
+        // Most imports use the default `Fotocopy` folder at a volume's root.
+        // Check that path directly before opening any directory, so recovery
+        // stays constant-time even when the root itself holds many files.
+        let defaultRoot = normalizedRoot.appendingPathComponent("Fotocopy", isDirectory: true)
+        let defaultManifestURL = defaultRoot
+            .appendingPathComponent(metadataDirectoryName, isDirectory: true)
+            .appendingPathComponent(databaseFilename)
+        if fileManager.fileExists(atPath: defaultManifestURL.path) {
+            return ManifestRootSearchResult(roots: [defaultRoot], reachedDirectoryLimit: false)
+        }
+
+        var roots: [URL] = []
+        var queue: [(url: URL, depth: Int)] = [(normalizedRoot, 0)]
+        var nextIndex = 0
+        var inspectedDirectories = 0
+        var reachedDirectoryLimit = false
+
+        while nextIndex < queue.count {
+            guard inspectedDirectories < maximumDirectories else {
+                reachedDirectoryLimit = true
+                break
+            }
+
+            let candidate = queue[nextIndex]
+            nextIndex += 1
+            inspectedDirectories += 1
+
+            let manifestURL = candidate.url
+                .appendingPathComponent(metadataDirectoryName, isDirectory: true)
+                .appendingPathComponent(databaseFilename)
+            if fileManager.fileExists(atPath: manifestURL.path) {
+                roots.append(candidate.url)
+                // A destination owns its metadata folder. Do not discover a
+                // potentially unrelated nested destination inside it.
+                continue
+            }
+
+            guard candidate.depth < maximumDepth,
+                  let children = try? fileManager.contentsOfDirectory(
+                    at: candidate.url,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                  ) else {
+                continue
+            }
+
+            for child in children.sorted(by: { $0.path < $1.path }) {
+                guard child.lastPathComponent != metadataDirectoryName,
+                      let values = try? child.resourceValues(
+                        forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+                      ),
+                      values.isDirectory == true,
+                      values.isSymbolicLink != true else {
+                    continue
+                }
+                queue.append((child.standardizedFileURL, candidate.depth + 1))
+            }
+        }
+
+        return ManifestRootSearchResult(
+            roots: roots.sorted { $0.path < $1.path },
+            reachedDirectoryLimit: reachedDirectoryLimit
+        )
+    }
 
     private static let supportedExtensions = LibraryDecisionEngine.supportedStillImageExtensions.union([
         "mov", "mp4", "m4v"

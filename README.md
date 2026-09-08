@@ -13,6 +13,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - Previews an import before copying, with file-type, camera-model, and date-range filters.
 - Supports copy or move imports; move is deliberately unavailable for Apple Photos libraries.
 - Uses a destination manifest to identify prior imports conservatively—even when cameras reuse filenames—and reconciles later Finder moves within a date folder.
+- Recovers from an accidentally selected drive root by looking briefly for an existing Fotocopy manifest before scanning media; a single matching library is selected automatically, while multiple matches require your choice.
 - Can open and eject source or destination volumes as part of the import flow.
 
 ### Cull Canon CR3 bursts quickly

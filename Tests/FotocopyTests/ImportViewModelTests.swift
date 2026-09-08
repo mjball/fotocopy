@@ -62,6 +62,33 @@ struct ImportViewModelTests {
         vm.cancelPreview()
     }
 
+    @Test func recoversUniqueNestedDestinationManifestBeforeScanningParent() async throws {
+        let source = try makeTempDir()
+        let parentDestination = try makeTempDir()
+        defer {
+            cleanup(source)
+            cleanup(parentDestination)
+        }
+        let libraryDestination = parentDestination.appendingPathComponent("Fotocopy")
+        try FileManager.default.createDirectory(at: libraryDestination, withIntermediateDirectories: true)
+        try await DestinationManifest(destinationURL: libraryDestination).rebuildManifest()
+
+        let vm = ImportViewModel()
+        vm.sourcePath = source.path
+        vm.destinationPath = parentDestination.path
+        vm.runPreview()
+
+        for _ in 0 ..< 1_000 where vm.automaticallySelectedDestinationPath == nil {
+            await Task.yield()
+        }
+
+        #expect(vm.automaticallySelectedDestinationPath == libraryDestination.path)
+        #expect(FileManager.default.fileExists(
+            atPath: DestinationManifest(destinationURL: parentDestination).databaseURL.path
+        ) == false)
+        vm.cancelPreview()
+    }
+
     // MARK: - importDisabledReason
 
     @Test func disabledWhenPathsEmpty() {
