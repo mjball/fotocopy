@@ -1,16 +1,18 @@
+import AppKit
 import SwiftUI
 
 /// A library-wide review over ordinary Fotocopy folders. This view reads the
 /// current Import destination every time it refreshes; it has no independent
 /// catalog or sidecar database.
 struct CullLibraryDecisionsView: View {
-    @Bindable var model: CullViewModel
+    @Bindable var library: CullLibraryViewModel
+    let openDate: (CullLibraryDecision) -> Void
     @AppStorage(PreferenceKeys.destinationPath) private var configuredLibraryPath = ""
     @State private var filter: CullLibraryDecisionFilter = .all
     @State private var dateFilter: String?
     @State private var filenameQuery = ""
 
-    private var scan: CullLibraryDecisionScan? { model.libraryDecisionScan }
+    private var scan: CullLibraryDecisionScan? { library.decisionScan }
 
     private var filteredDecisions: [CullLibraryDecision] {
         guard let scan else { return [] }
@@ -35,10 +37,10 @@ struct CullLibraryDecisionsView: View {
 
     var body: some View {
         Group {
-            if model.isScanningLibraryDecisions, scan == nil {
+            if library.isScanningDecisions, scan == nil {
                 VStack(spacing: 8) {
                     ProgressView("Reading Organize")
-                    Text(model.libraryScanStatus)
+                    Text(library.scanStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -48,31 +50,31 @@ struct CullLibraryDecisionsView: View {
                 ContentUnavailableView(
                     "No Fotocopy library selected",
                     systemImage: "externaldrive.badge.questionmark",
-                    description: Text(model.libraryDecisionError ?? "Set an Import destination, then Organize can review its Keeps and Rejects folders."))
+                    description: Text(library.decisionError ?? "Set an Import destination, then Organize can review its Keeps and Rejects folders."))
             }
         }
         .task {
-            model.refreshLibraryDecisionsIfNeeded()
-            model.refreshLibraryImageStatisticsIfNeeded()
+            library.refreshDecisionsIfNeeded()
+            library.refreshImageStatisticsIfNeeded()
         }
         .onChange(of: configuredLibraryPath) { _, _ in
-            model.refreshLibraryDecisions()
+            library.refreshDecisions()
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    model.refreshLibraryDecisions()
+                    library.refreshDecisions()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .labelStyle(.titleAndIcon)
                 .controlSize(.small)
-                .disabled(model.isScanningLibraryDecisions || model.isTrashingLibraryRejects)
+                .disabled(library.isScanningDecisions || library.isTrashingRejects)
             }
         }
-        .sheet(item: $model.pendingLibraryTrashPlan) { plan in
+        .sheet(item: $library.pendingTrashPlan) { plan in
             CullTrashConfirmationSheet(plan: plan) {
-                model.trashLibraryRejects(using: plan)
+                library.trashRejects(using: plan)
             }
         }
     }
@@ -83,17 +85,17 @@ struct CullLibraryDecisionsView: View {
                 header(scan)
                 filters
 
-                if model.isScanningLibraryDecisions || model.isTrashingLibraryRejects {
+                if library.isScanningDecisions || library.isTrashingRejects {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
-                        Text(model.libraryScanStatus)
+                        Text(library.scanStatus)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                if let error = model.libraryDecisionError {
+                if let error = library.decisionError {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.orange)
@@ -101,19 +103,19 @@ struct CullLibraryDecisionsView: View {
                         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 }
 
-                if let result = model.libraryTrashResult {
+                if let result = library.trashResult {
                     trashResultBanner(result)
                 }
 
                 if filter == .rejected, scan.rejectedCount > 0 {
                     Button(role: .destructive) {
-                        model.prepareLibraryTrash()
+                        library.prepareTrash()
                     } label: {
                         Label("Move all \(scan.rejectedCount) Reject\(scan.rejectedCount == 1 ? "" : "s") to Trash…", systemImage: "trash")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(model.isScanningLibraryDecisions || model.isTrashingLibraryRejects)
+                    .disabled(library.isScanningDecisions || library.isTrashingRejects)
                     .help("Rechecks the direct Rejects folders, then asks once before using Finder's Trash")
                 }
 
@@ -149,8 +151,8 @@ struct CullLibraryDecisionsView: View {
                                 ForEach(group.decisions) { decision in
                                     CullLibraryDecisionCard(
                                         decision: decision,
-                                        reveal: { model.revealLibraryDecision(decision) },
-                                        openDate: { model.openDecisionDate(decision) }
+                                        reveal: { reveal(decision) },
+                                        openDate: { openDate(decision) }
                                     )
                                 }
                             }
@@ -171,7 +173,7 @@ struct CullLibraryDecisionsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .help(scan.libraryRootURL.path)
-            if let statistics = model.libraryImageStatistics {
+            if let statistics = library.imageStatistics {
                 LibraryImageStatisticsHeader(statistics: statistics)
             } else {
                 HStack(spacing: 8) {
@@ -229,7 +231,7 @@ struct CullLibraryDecisionsView: View {
                 HStack {
                     Label("\(result.failures.count) package\(result.failures.count == 1 ? "" : "s") need attention.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    Button("Reveal failures") { model.revealLibraryTrashFailures() }
+                    Button("Reveal failures") { revealTrashFailures() }
                         .buttonStyle(.link)
                 }
                 ForEach(result.failures.prefix(3)) { failure in
@@ -248,6 +250,17 @@ struct CullLibraryDecisionsView: View {
         .font(.subheadline)
         .padding(12)
         .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func reveal(_ decision: CullLibraryDecision) {
+        NSWorkspace.shared.activateFileViewerSelecting([decision.rawURL])
+    }
+
+    private func revealTrashFailures() {
+        guard let result = library.trashResult else { return }
+        let folders = Array(Set(result.failures.map { $0.rawURL.deletingLastPathComponent() }))
+        guard !folders.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(folders)
     }
 }
 

@@ -29,7 +29,7 @@ struct CullWorkspaceView: View {
         }
         .task {
             model.resumeLastScanIfNeeded()
-            model.refreshLibraryImageStatisticsIfNeeded()
+            model.library.refreshImageStatisticsIfNeeded()
         }
         .alert("Could not scan folder", isPresented: $model.showError) {
             Button("OK", role: .cancel) { }
@@ -565,7 +565,7 @@ private struct SingleFrameReviewView: View {
 
             Spacer(minLength: 8)
             safetyHint
-            CullLibraryStatisticsInspector(model: model)
+            CullLibraryStatisticsInspector(library: model.library)
         }
         .frame(width: 230, alignment: .leading)
         .frame(minHeight: height, maxHeight: height, alignment: .topLeading)
@@ -714,7 +714,12 @@ private struct SingleFrameReviewView: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 9) {
                     ForEach(visibleFrames) { candidate in
-                        Button { model.selectSingleFrame(candidate.url) } label: {
+                        Button {
+                            model.selectSingleFrame(
+                                candidate.url,
+                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                            )
+                        } label: {
                             ZStack(alignment: .bottomLeading) {
                                 CullPreviewView(url: candidate.url, size: .thumbnail)
                                     .frame(width: 96, height: 70)
@@ -894,7 +899,10 @@ private struct BurstReviewView: View {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(burst.frames) { frame in
                         Button {
-                            model.selectFrame(frame.url)
+                            model.selectFrame(
+                                frame.url,
+                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                            )
                         } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 CullPreviewView(url: frame.url, size: .thumbnail)
@@ -1042,7 +1050,7 @@ private struct BurstReviewView: View {
 
             Spacer(minLength: 8)
             safetyHint
-            CullLibraryStatisticsInspector(model: model)
+            CullLibraryStatisticsInspector(library: model.library)
         }
         .frame(width: 230, alignment: .leading)
         .frame(minHeight: height, maxHeight: height, alignment: .topLeading)
@@ -1299,7 +1307,10 @@ private struct BurstReviewView: View {
             HStack(spacing: 9) {
                 ForEach(burst.frames) { frame in
                     Button {
-                        model.selectFrame(frame.url)
+                        model.selectFrame(
+                            frame.url,
+                            extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                        )
                     } label: {
                         ZStack(alignment: .bottomLeading) {
                             CullPreviewView(url: frame.url, size: .thumbnail)
@@ -1797,33 +1808,6 @@ private enum FullPreviewState: Equatable {
     case failed
 }
 
-/// Full-resolution previews can be large enough to saturate a slower external
-/// volume. This gate permits only one ImageIO decode at a time. A cancelled
-/// request that was waiting acquires and releases the gate without decoding,
-/// so rapid frame navigation cannot create a backlog of stale reads.
-private actor CullFullPreviewGate {
-    private var isHeld = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func acquire() async {
-        guard isHeld else {
-            isHeld = true
-            return
-        }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
-    }
-
-    func release() {
-        if waiters.isEmpty {
-            isHeld = false
-        } else {
-            waiters.removeFirst().resume()
-        }
-    }
-}
-
 /// The comparison strip begins with a direct choice of its source, so the
 /// photographer can see both the immediate action and the resulting view.
 private struct CullInspectionEmptyState: View {
@@ -1926,7 +1910,10 @@ private struct CullInspectionCropSection: View {
                 LazyHStack(alignment: .top, spacing: 10) {
                     ForEach(burst.frames) { frame in
                         Button {
-                            model.selectFrame(frame.url)
+                            model.selectFrame(
+                                frame.url,
+                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                            )
                         } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 inspectionCrop(for: frame)
@@ -2238,7 +2225,7 @@ final class CullViewModel {
     var isMoving = false
     var movingFrameCount = 0
     var lastMoveSummary: String?
-    var quickExportSelection = Set<URL>()
+    var quickExportSelection = CullQuickExportSelection()
     var isQuickExporting = false
     var quickExportAlertTitle = "Quick Export"
     var quickExportAlertMessage = ""
@@ -2251,16 +2238,7 @@ final class CullViewModel {
     var singleFrameFilter: SingleFrameReviewFilter = .all
     var inspectionSource: CullInspectionSource?
     var isPickingInspectionPoint = false
-    var libraryDecisionScan: CullLibraryDecisionScan?
-    var libraryImageStatistics: LibraryImageStatistics?
-    var isScanningLibraryImageStatistics = false
-    var libraryImageStatisticsError: String?
-    var isScanningLibraryDecisions = false
-    var libraryScanStatus = ""
-    var libraryDecisionError: String?
-    var pendingLibraryTrashPlan: CullLibraryTrashPlan?
-    var isTrashingLibraryRejects = false
-    var libraryTrashResult: CullLibraryTrashResult?
+    let library = CullLibraryViewModel()
     private(set) var dispositions: [URL: CullDisposition] = [:]
     private(set) var cameraAFTargets: [URL: CameraAFTarget] = [:]
     private(set) var loadedCameraAFTargetURLs: Set<URL> = []
@@ -2271,8 +2249,6 @@ final class CullViewModel {
     private var selectsLastReviewGroupAfterScan = false
     private var selectsLastFrameAfterScan = false
     private var folderNavigationTask: Task<Void, Never>?
-    private var libraryScanTask: Task<Void, Never>?
-    private var libraryImageStatisticsTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
 
     init() {
@@ -2330,10 +2306,7 @@ final class CullViewModel {
 
     var selectedQuickExportURLs: [URL] {
         let frames = (scanResult?.bursts.flatMap(\.frames) ?? []) + (scanResult?.singleFrames ?? [])
-        let selected = quickExportSelection.isEmpty
-            ? Set(selectedFrameURL.map { [$0] } ?? [])
-            : quickExportSelection
-        return frames.map(\.url).filter(selected.contains)
+        return quickExportSelection.selectedURLs(from: frames, fallback: selectedFrameURL)
     }
 
     var canQuickExport: Bool {
@@ -2346,12 +2319,6 @@ final class CullViewModel {
 
     var canNavigateNextCullFolder: Bool {
         nextCullFolderURL != nil && !isScanning && !isMoving
-    }
-
-    var configuredLibraryURL: URL? {
-        guard let path = UserDefaults.standard.string(forKey: PreferenceKeys.destinationPath),
-              !path.isEmpty else { return nil }
-        return LibraryDecisionEngine.libraryRoot(forImportDestination: URL(fileURLWithPath: path))
     }
 
     /// A manual choice takes precedence. Camera AF mode resolves the target
@@ -2416,12 +2383,12 @@ final class CullViewModel {
 
     func showLibraryDecisions() {
         destination = .libraryDecisions
-        refreshLibraryDecisionsIfNeeded()
+        library.refreshDecisionsIfNeeded()
     }
 
     func showBurstCulling() {
         resumeLastScanIfNeeded()
-        refreshLibraryImageStatisticsIfNeeded()
+        library.refreshImageStatisticsIfNeeded()
         if selectedReviewGroup == nil,
            let groupID = CullReviewGroupNavigation.initialGroupID(
                in: scanResult?.reviewGroups ?? [],
@@ -2437,163 +2404,10 @@ final class CullViewModel {
         } else if scanResult == nil, folderURL != nil, !isMoving {
             startScan(preferring: .singleFrames)
         }
-        refreshLibraryImageStatisticsIfNeeded()
+        library.refreshImageStatisticsIfNeeded()
         if scanResult?.reviewGroups.contains(where: { $0.id == .singleFrames }) == true {
             selectReviewGroup(withID: .singleFrames)
         }
-    }
-
-    func refreshLibraryImageStatisticsIfNeeded() {
-        guard let libraryRoot = configuredLibraryURL else {
-            libraryImageStatistics = nil
-            libraryImageStatisticsError = nil
-            return
-        }
-        guard libraryImageStatistics?.libraryRootURL != libraryRoot else { return }
-        refreshLibraryImageStatistics()
-    }
-
-    func refreshLibraryImageStatistics() {
-        guard let libraryRoot = configuredLibraryURL,
-              !isScanningLibraryImageStatistics,
-              !isScanningLibraryDecisions,
-              !isTrashingLibraryRejects else { return }
-        libraryImageStatisticsTask?.cancel()
-        libraryImageStatisticsError = nil
-        isScanningLibraryImageStatistics = true
-        let model = self
-        libraryImageStatisticsTask = Task {
-            do {
-                let statistics = try await Task.detached(priority: .utility) {
-                    try LibraryDecisionEngine.scanImageStatistics(libraryRootURL: libraryRoot)
-                }.value
-                guard !Task.isCancelled else { return }
-                model.libraryImageStatistics = statistics
-            } catch is CancellationError {
-                // Replaced by a fuller Organize scan or a newer library scan.
-            } catch {
-                model.libraryImageStatisticsError = error.localizedDescription
-            }
-            model.isScanningLibraryImageStatistics = false
-            model.libraryImageStatisticsTask = nil
-        }
-    }
-
-    func refreshLibraryDecisionsIfNeeded() {
-        guard let libraryRoot = configuredLibraryURL else {
-            libraryDecisionScan = nil
-            libraryDecisionError = "Choose an Import destination before reviewing library decisions."
-            return
-        }
-        guard libraryDecisionScan?.libraryRootURL != libraryRoot else { return }
-        refreshLibraryDecisions()
-    }
-
-    func refreshLibraryDecisions() {
-        guard let libraryRoot = configuredLibraryURL,
-              !isScanningLibraryDecisions,
-              !isTrashingLibraryRejects else { return }
-        libraryScanTask?.cancel()
-        libraryImageStatisticsTask?.cancel()
-        isScanningLibraryImageStatistics = false
-        libraryDecisionError = nil
-        libraryTrashResult = nil
-        isScanningLibraryDecisions = true
-        libraryScanStatus = "Finding Keeps and Rejects…"
-        let model = self
-        libraryScanTask = Task {
-            do {
-                let scan = try await Task.detached(priority: .userInitiated) {
-                    try LibraryDecisionEngine.scan(libraryRootURL: libraryRoot)
-                }.value
-                guard !Task.isCancelled else { return }
-                model.libraryDecisionScan = scan
-                model.libraryImageStatistics = scan.imageStatistics
-                model.libraryImageStatisticsError = nil
-                model.libraryScanStatus = "Found \(scan.decisions.count) decision\(scan.decisions.count == 1 ? "" : "s")"
-            } catch is CancellationError {
-                // Replaced by a newer library scan.
-            } catch {
-                model.libraryDecisionError = error.localizedDescription
-            }
-            model.isScanningLibraryDecisions = false
-            model.libraryScanTask = nil
-        }
-    }
-
-    func prepareLibraryTrash() {
-        guard let libraryRoot = configuredLibraryURL,
-              !isTrashingLibraryRejects,
-              !isScanningLibraryDecisions else { return }
-        libraryImageStatisticsTask?.cancel()
-        isScanningLibraryImageStatistics = false
-        libraryDecisionError = nil
-        isScanningLibraryDecisions = true
-        libraryScanStatus = "Rechecking Rejects before Trash…"
-        let model = self
-        libraryScanTask = Task {
-            do {
-                let scan = try await Task.detached(priority: .userInitiated) {
-                    try LibraryDecisionEngine.scan(libraryRootURL: libraryRoot)
-                }.value
-                let plan = try LibraryDecisionEngine.makeTrashPlan(from: scan)
-                guard !Task.isCancelled else { return }
-                model.libraryDecisionScan = scan
-                model.libraryImageStatistics = scan.imageStatistics
-                model.libraryImageStatisticsError = nil
-                model.pendingLibraryTrashPlan = plan
-                model.libraryScanStatus = "Rejects rechecked"
-            } catch is CancellationError {
-                // Replaced by a newer library scan.
-            } catch {
-                model.libraryDecisionError = error.localizedDescription
-            }
-            model.isScanningLibraryDecisions = false
-            model.libraryScanTask = nil
-        }
-    }
-
-    func trashLibraryRejects(using plan: CullLibraryTrashPlan) {
-        guard !isTrashingLibraryRejects else { return }
-        pendingLibraryTrashPlan = nil
-        libraryDecisionError = nil
-        isTrashingLibraryRejects = true
-        libraryScanStatus = "Moving Rejects to Finder's Trash…"
-        let model = self
-        Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                LibraryDecisionEngine.executeTrash(plan)
-            }.value
-            guard !Task.isCancelled else { return }
-            model.libraryTrashResult = result
-            model.isTrashingLibraryRejects = false
-            model.libraryScanStatus = "Trash finished"
-            do {
-                let refreshed = try await Task.detached(priority: .userInitiated) {
-                    try LibraryDecisionEngine.scan(libraryRootURL: plan.libraryRootURL)
-                }.value
-                model.libraryDecisionScan = refreshed
-                model.libraryImageStatistics = refreshed.imageStatistics
-                model.libraryImageStatisticsError = nil
-            } catch {
-                model.libraryDecisionError = "Files may have moved, but Library Decisions could not refresh: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    func revealLibraryDecision(_ decision: CullLibraryDecision) {
-        NSWorkspace.shared.activateFileViewerSelecting([decision.rawURL])
-    }
-
-    func revealLibraryTrashFailures() {
-        guard let result = libraryTrashResult else { return }
-        let folders = Array(Set(result.failures.map { $0.rawURL.deletingLastPathComponent() }))
-        guard !folders.isEmpty else { return }
-        NSWorkspace.shared.activateFileViewerSelecting(folders)
-    }
-
-    func openDecisionDate(_ decision: CullLibraryDecision) {
-        use(folder: decision.dateFolderURL)
     }
 
     private func use(
@@ -2612,7 +2426,7 @@ final class CullViewModel {
     }
 
     func scan() {
-        refreshLibraryImageStatistics()
+        library.refreshImageStatistics()
         startScan(preferring: selectedReviewGroupID)
     }
 
@@ -2641,7 +2455,7 @@ final class CullViewModel {
         lastMoveSummary = nil
         destination = .review(nil)
         selectedFrameURL = nil
-        quickExportSelection.removeAll()
+        quickExportSelection.clear()
         inspectionSource = nil
         isPickingInspectionPoint = false
         cameraAFTargets.removeAll()
@@ -2711,7 +2525,7 @@ final class CullViewModel {
         previousCullFolderURL = nil
         nextCullFolderURL = nil
 
-        let roots = [configuredLibraryURL, CullFolderNavigation.libraryRoot(containing: currentFolder)]
+        let roots = [library.configuredLibraryURL, CullFolderNavigation.libraryRoot(containing: currentFolder)]
             .compactMap { $0 }
             .reduce(into: [URL]()) { roots, root in
                 if !roots.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
@@ -2763,65 +2577,35 @@ final class CullViewModel {
         selectedFrameURL = selectingLastFrame
             ? visibleFrames(in: group).last?.url
             : visibleFrames(in: group).first?.url
-        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
+        quickExportSelection.reset(to: selectedFrameURL)
         inspectionSource = nil
         isPickingInspectionPoint = false
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
-    func selectFrame(_ url: URL) {
+    func selectFrame(_ url: URL, extendingQuickExportSelection: Bool = false) {
         selectedFrameURL = url
-        updateQuickExportSelection(for: url)
+        quickExportSelection.select(url, extendingSelection: extendingQuickExportSelection)
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
-    func selectSingleFrame(_ url: URL) {
+    func selectSingleFrame(_ url: URL, extendingQuickExportSelection: Bool = false) {
         guard isReviewingSingles,
               filteredSingleFrames.contains(where: { $0.url == url }) else { return }
         selectedFrameURL = url
-        updateQuickExportSelection(for: url)
+        quickExportSelection.select(url, extendingSelection: extendingQuickExportSelection)
         inspectionSource = nil
         isPickingInspectionPoint = false
         automaticallyUseCameraAFTargetForSelectedFrame()
-    }
-
-    /// A normal click begins a new export selection. Command-click retains
-    /// prior frames, matching the Finder convention without changing Cull's
-    /// single-frame preview focus.
-    private func updateQuickExportSelection(for url: URL) {
-        if NSEvent.modifierFlags.contains(.command) {
-            if !quickExportSelection.insert(url).inserted {
-                quickExportSelection.remove(url)
-            }
-        } else {
-            quickExportSelection = [url]
-        }
     }
 
     func isQuickExportSelected(_ url: URL) -> Bool {
         selectedQuickExportURLs.contains(url)
     }
 
-    func quickExportSelectedPhotos() {
+    func quickExportSelectedPhotos(to destinationFolderURL: URL) {
         let sources = selectedQuickExportURLs
         guard !sources.isEmpty, !isQuickExporting else { return }
-
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Export JPEGs"
-        panel.message = "Choose a folder for \(sources.count) JPEG \(sources.count == 1 ? "export" : "exports"). Fotocopy leaves the original CR3 files unchanged and will not overwrite existing JPEGs."
-        if let savedPath = UserDefaults.standard.string(forKey: PreferenceKeys.lastQuickExportFolder),
-           FileManager.default.fileExists(atPath: savedPath) {
-            panel.directoryURL = URL(fileURLWithPath: savedPath)
-        } else if let source = sources.first {
-            panel.directoryURL = source.deletingLastPathComponent()
-        }
-
-        guard panel.runModal() == .OK, let destinationFolderURL = panel.url else { return }
-        UserDefaults.standard.set(destinationFolderURL.path, forKey: PreferenceKeys.lastQuickExportFolder)
         isQuickExporting = true
 
         Task { [sources, destinationFolderURL] in
@@ -2869,7 +2653,7 @@ final class CullViewModel {
     func selectFirstSingleFrameMatchingFilter() {
         guard isReviewingSingles else { return }
         selectedFrameURL = filteredSingleFrames.first?.url
-        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
+        quickExportSelection.reset(to: selectedFrameURL)
         inspectionSource = nil
         isPickingInspectionPoint = false
     }
@@ -2881,7 +2665,7 @@ final class CullViewModel {
             adjacentTo: selectedFrameURL,
             offset: offset
         )
-        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
+        quickExportSelection.reset(to: selectedFrameURL)
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -2909,7 +2693,7 @@ final class CullViewModel {
             adjacentTo: selectedFrameURL,
             offset: offset
         )
-        quickExportSelection = Set(selectedFrameURL.map { [$0] } ?? [])
+        quickExportSelection.reset(to: selectedFrameURL)
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -3227,7 +3011,7 @@ final class CullViewModel {
                 guard !Task.isCancelled, let self else { return }
                 self.rewriteFrameURLs(using: result.rawRelocations)
                 self.applyDispositionStates(changedStates, after: result.rawRelocations)
-                self.applyLibraryImageStatistics(after: result, in: folderURL)
+                self.library.applyImageStatistics(after: result, in: folderURL)
                 if let nextFrameURL {
                     let destinationBySource = Dictionary(
                         uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
@@ -3373,24 +3157,6 @@ final class CullViewModel {
         }
     }
 
-    private func applyLibraryImageStatistics(after result: CullApplyResult, in folderURL: URL) {
-        guard let statistics = libraryImageStatistics,
-              let libraryRoot = configuredLibraryURL,
-              statistics.libraryRootURL == libraryRoot,
-              LibraryDecisionEngine.isRecognizedDateFolder(folderURL, beneath: libraryRoot) else {
-            return
-        }
-        guard let updated = statistics.applying(
-            rawRelocations: result.rawRelocations,
-            rawFileByteCounts: result.rawFileByteCounts,
-            in: folderURL
-        ) else {
-            refreshLibraryImageStatistics()
-            return
-        }
-        libraryImageStatistics = updated
-    }
-
     private func rewriteFrameURLs(using relocations: [CullFrameRelocation]) {
         let destinationBySource = Dictionary(
             uniqueKeysWithValues: relocations.map { ($0.sourceURL, $0.destinationURL) }
@@ -3427,7 +3193,7 @@ final class CullViewModel {
             destination = .review(.burst(rewrittenURL(selectedBurstID)))
         }
         selectedFrameURL = selectedFrameURL.map(rewrittenURL)
-        quickExportSelection = Set(quickExportSelection.map(rewrittenURL))
+        quickExportSelection.rewrite(using: destinationBySource)
         dispositions = rewriteDictionary(dispositions, using: destinationBySource)
         cameraAFTargets = rewriteDictionary(cameraAFTargets, using: destinationBySource)
         loadedCameraAFTargetURLs = Set(loadedCameraAFTargetURLs.map(rewrittenURL))
@@ -3477,139 +3243,5 @@ final class CullViewModel {
     func revealSelectedFrame() {
         guard let selectedFrameURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([selectedFrameURL])
-    }
-}
-
-private final class CullPreviewCache: @unchecked Sendable {
-    static let shared = CullPreviewCache()
-
-    private let previews = NSCache<NSString, NSImage>()
-    private let fullPreviews = NSCache<NSURL, NSImage>()
-    private let focusCrops = NSCache<NSString, NSImage>()
-    private let fullPreviewGate = CullFullPreviewGate()
-
-    /// Crop extraction can require decoding a much larger embedded JPEG than a
-    /// normal cull preview. Keep that I/O bounded so a long burst does not
-    /// overwhelm a slower external drive or inflate memory all at once.
-    private let focusCropGate = DispatchSemaphore(value: 2)
-
-    private init() {
-        previews.countLimit = 72
-        previews.totalCostLimit = 140 * 1_024 * 1_024
-        fullPreviews.countLimit = 1
-        fullPreviews.totalCostLimit = 300 * 1_024 * 1_024
-        focusCrops.countLimit = 24
-        focusCrops.totalCostLimit = 80 * 1_024 * 1_024
-    }
-
-    func preview(for url: URL, maxPixelSize: Int) -> NSImage? {
-        let key = "\(url.path)#\(maxPixelSize)" as NSString
-        if let cached = previews.object(forKey: key) { return cached }
-        guard let image = image(for: url, maxPixelSize: maxPixelSize) else { return nil }
-        previews.setObject(image, forKey: key, cost: imageCost(image))
-        return image
-    }
-
-    func fullPreview(for url: URL) async -> NSImage? {
-        let key = url as NSURL
-        if let cached = fullPreviews.object(forKey: key) { return cached }
-
-        await fullPreviewGate.acquire()
-        guard !Task.isCancelled else {
-            await fullPreviewGate.release()
-            return nil
-        }
-        if let cached = fullPreviews.object(forKey: key) {
-            await fullPreviewGate.release()
-            return cached
-        }
-
-        // ImageIO's CR3 decode cannot be interrupted once it begins, but the
-        // gate above prevents cancelled frame requests from starting another
-        // expensive decode while this one is in progress.
-        let decoded = await Task.detached(priority: .userInitiated) { [self] in
-            image(for: url, maxPixelSize: 16_384)
-        }.value
-        if let decoded {
-            fullPreviews.setObject(decoded, forKey: key, cost: imageCost(decoded))
-        }
-        await fullPreviewGate.release()
-        return decoded
-    }
-
-    func focusCrop(for url: URL, around point: CullInspectionPoint) -> NSImage? {
-        let key = "\(url.path)#focus#\(point.cacheKey)" as NSString
-        if let cached = focusCrops.object(forKey: key) { return cached }
-
-        focusCropGate.wait()
-        defer { focusCropGate.signal() }
-
-        // Another visible crop can have completed while this task was waiting.
-        if let cached = focusCrops.object(forKey: key) { return cached }
-
-        // This is intentionally larger than the main preview, but the decoded
-        // image is immediately reduced to a small crop and is never retained.
-        guard let sourceImage = cgImage(for: url, maxPixelSize: 8_192) else { return nil }
-        let cropRect = CullInspectionGeometry.cropRect(
-            imageSize: CGSize(width: sourceImage.width, height: sourceImage.height),
-            around: point
-        )
-        guard let cropped = sourceImage.cropping(to: cropRect),
-              let materialized = materialize(cropped, maximumPixelSize: 768) else {
-            return nil
-        }
-
-        let image = NSImage(
-            cgImage: materialized,
-            size: NSSize(width: materialized.width, height: materialized.height)
-        )
-        focusCrops.setObject(image, forKey: key, cost: imageCost(image))
-        return image
-    }
-
-    func prefetch(_ urls: [URL]) {
-        for url in urls {
-            _ = preview(for: url, maxPixelSize: CullPreviewSize.thumbnail.maxPixelSize)
-        }
-    }
-
-    private func image(for url: URL, maxPixelSize: Int) -> NSImage? {
-        guard let cgImage = cgImage(for: url, maxPixelSize: maxPixelSize) else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-    }
-
-    private func cgImage(for url: URL, maxPixelSize: Int) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: false
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
-
-    private func materialize(_ image: CGImage, maximumPixelSize: Int) -> CGImage? {
-        let longestEdge = max(image.width, image.height)
-        guard longestEdge > 0 else { return nil }
-        let scale = min(1, CGFloat(maximumPixelSize) / CGFloat(longestEdge))
-        let width = max(1, Int((CGFloat(image.width) * scale).rounded()))
-        let height = max(1, Int((CGFloat(image.height) * scale).rounded()))
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
-    }
-
-    private func imageCost(_ image: NSImage) -> Int {
-        max(1, Int(image.size.width * image.size.height * 4))
     }
 }

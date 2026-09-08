@@ -334,7 +334,7 @@ private struct CullCommands: Commands {
             Divider()
 
             Button("Quick Export as JPEG…") {
-                model.quickExportSelectedPhotos()
+                chooseQuickExportFolder()
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(!canQuickExport)
@@ -390,5 +390,28 @@ private struct CullCommands: Commands {
     private func clearBurstMarks() {
         guard let selectedBurst else { return }
         model.clearDispositions(in: selectedBurst)
+    }
+
+    private func chooseQuickExportFolder() {
+        let sources = model.selectedQuickExportURLs
+        guard !sources.isEmpty else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export JPEGs"
+        panel.message = "Choose a folder for \(sources.count) JPEG \(sources.count == 1 ? "export" : "exports"). Fotocopy leaves the original CR3 files unchanged and will not overwrite existing JPEGs."
+        if let savedPath = UserDefaults.standard.string(forKey: PreferenceKeys.lastQuickExportFolder),
+           FileManager.default.fileExists(atPath: savedPath) {
+            panel.directoryURL = URL(fileURLWithPath: savedPath)
+        } else if let source = sources.first {
+            panel.directoryURL = source.deletingLastPathComponent()
+        }
+
+        guard panel.runModal() == .OK, let destinationFolderURL = panel.url else { return }
+        UserDefaults.standard.set(destinationFolderURL.path, forKey: PreferenceKeys.lastQuickExportFolder)
+        model.quickExportSelectedPhotos(to: destinationFolderURL)
     }
 }
