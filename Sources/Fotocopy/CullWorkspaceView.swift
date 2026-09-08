@@ -803,16 +803,16 @@ private struct BurstReviewView: View {
                     inspectionSource: inspectionSource,
                     model: model
                 )
+            } else if model.isPickingInspectionPoint {
+                CullInspectionPickingState(
+                    cancel: model.cancelPickingInspectionPoint
+                )
             } else {
-                VStack(alignment: .leading, spacing: 5) {
-                    Label("Subject-local review", systemImage: "scope")
-                        .font(.caption.weight(.semibold))
-                    Text("Fotocopy will use an active camera AF target when the file records one, or you can pick a detail manually. Fotocopy still does not choose or discard frames for you.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(10)
-                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                CullInspectionEmptyState(
+                    hasCameraAFTarget: selectedFrame.flatMap { model.cameraAFTarget(for: $0.url) } != nil,
+                    useCameraAFTarget: model.useCameraAFTarget,
+                    pickDetail: model.beginPickingInspectionPoint
+                )
             }
 
             HStack(spacing: 10) {
@@ -1396,7 +1396,7 @@ private struct CullInspectionPreviewView: View {
                 }
 
                 if isPickingInspectionPoint {
-                    Text("Click a subject detail")
+                    Text("Click the detail to compare")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 6)
@@ -1577,6 +1577,86 @@ private actor CullFullPreviewGate {
     }
 }
 
+/// The comparison strip begins with a direct choice of its source, so the
+/// photographer can see both the immediate action and the resulting view.
+private struct CullInspectionEmptyState: View {
+    let hasCameraAFTarget: Bool
+    let useCameraAFTarget: () -> Void
+    let pickDetail: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "viewfinder")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Compare a detail across this burst")
+                    .font(.headline)
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                if hasCameraAFTarget {
+                    Button("Use camera focus area", action: useCameraAFTarget)
+                        .buttonStyle(.borderedProminent)
+                }
+
+                if hasCameraAFTarget {
+                    Button("Pick a detail", action: pickDetail)
+                        .buttonStyle(.bordered)
+                } else {
+                    Button("Pick a detail", action: pickDetail)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var description: String {
+        hasCameraAFTarget
+            ? "Use the camera’s focus area, or click a detail in the photo. Fotocopy will show one close-up from every frame."
+            : "Click a detail in the photo. Fotocopy will show one close-up from every frame."
+    }
+}
+
+/// During manual selection, this replaces the zero state while the preview
+/// itself presents the click target and captures the chosen image position.
+private struct CullInspectionPickingState: View {
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "cursorarrow.click")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Choose a detail in the photo")
+                    .font(.headline)
+                Text("Fotocopy will show this area from every frame.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            Button("Cancel", action: cancel)
+                .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct CullInspectionCropSection: View {
     let burst: PhotoBurst
     let inspectionSource: CullInspectionSource
@@ -1586,16 +1666,12 @@ private struct CullInspectionCropSection: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(inspectionSource == .cameraAF ? "Camera-AF crops" : "Inspection-point crops")
+                    Text("Detail comparison")
                         .font(.headline)
                     Text(cropDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Text("Manual comparison")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             ScrollViewReader { proxy in
@@ -1668,9 +1744,9 @@ private struct CullInspectionCropSection: View {
     private var cropDescription: String {
         switch inspectionSource {
         case .manual:
-            return "The same normalized image area from each frame, extracted from its large embedded JPEG preview."
+            return "Selected image area across every frame."
         case .cameraAF:
-            return "The camera-recorded active AF area for each frame, extracted from its large embedded JPEG preview."
+            return "Camera focus area from every frame."
         }
     }
 
@@ -2393,6 +2469,10 @@ final class CullViewModel {
 
     func beginPickingInspectionPoint() {
         isPickingInspectionPoint = true
+    }
+
+    func cancelPickingInspectionPoint() {
+        isPickingInspectionPoint = false
     }
 
     func setInspectionPoint(_ point: CullInspectionPoint) {
