@@ -47,7 +47,7 @@ struct FotocopyApp: App {
                 }
                 .keyboardShortcut("1", modifiers: .command)
 
-                Button("Burst Cull") {
+                Button("Photo Cull") {
                     UserDefaults.standard.set(
                         FotocopyWorkspace.cullBursts.rawValue,
                         forKey: PreferenceKeys.activeWorkspace
@@ -166,8 +166,16 @@ private struct CullCommands: Commands {
             !model.isMoving
     }
 
+    private var canReviewFrame: Bool {
+        isCullActive &&
+            model.selectedFrameURL != nil &&
+            (selectedBurst != nil || model.selectedSingleFrame != nil) &&
+            !model.isScanning &&
+            !model.isMoving
+    }
+
     private var canUseCameraAFTarget: Bool {
-        guard canReviewBurst, let selectedFrameURL = model.selectedFrameURL else { return false }
+        guard canReviewFrame, let selectedFrameURL = model.selectedFrameURL else { return false }
         return model.cameraAFTarget(for: selectedFrameURL) != nil
     }
 
@@ -224,13 +232,13 @@ private struct CullCommands: Commands {
                 moveFrame(by: -1)
             }
             .keyboardShortcut(.leftArrow, modifiers: [])
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewFrame)
 
             Button("Next Frame") {
                 moveFrame(by: 1)
             }
             .keyboardShortcut(.rightArrow, modifiers: [])
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewFrame)
 
             Button("Previous Burst") {
                 model.moveSelectedBurst(by: -1)
@@ -250,13 +258,13 @@ private struct CullCommands: Commands {
                 model.keepSelectedFrame()
             }
             .keyboardShortcut("k", modifiers: [])
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewFrame)
 
             Button("Reject Current Frame") {
                 model.rejectSelectedFrame()
             }
             .keyboardShortcut("x", modifiers: [])
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewFrame)
 
             Button("Keep Current, Reject Rest") {
                 keepCurrentAndRejectRest()
@@ -298,7 +306,7 @@ private struct CullCommands: Commands {
             Button("Reveal Selected Frame in Finder") {
                 model.revealSelectedFrame()
             }
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewFrame)
 
             Divider()
 
@@ -319,18 +327,21 @@ private struct CullCommands: Commands {
             Button("Pick Detail Manually") {
                 model.beginPickingInspectionPoint()
             }
-            .disabled(!canReviewBurst)
+            .disabled(!canReviewFrame)
 
             Button("Clear Inspection Target") {
                 model.clearInspectionPoint()
             }
-            .disabled(!canReviewBurst || model.inspectionSource == nil)
+            .disabled(!canReviewFrame || model.inspectionSource == nil)
         }
     }
 
     private func moveFrame(by offset: Int) {
-        guard let selectedBurst else { return }
-        model.moveSelectedFrame(in: selectedBurst, by: offset)
+        if model.destination == .singleFrames {
+            model.moveSelectedSingleFrame(by: offset)
+        } else if let selectedBurst {
+            model.moveSelectedFrame(in: selectedBurst, by: offset)
+        }
     }
 
     private func keepCurrentAndRejectRest() {

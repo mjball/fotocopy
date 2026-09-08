@@ -18,7 +18,7 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
     var windowTitle: String {
         switch self {
         case .importPhotos: return "Photo Import"
-        case .cullBursts: return "Burst Cull"
+        case .cullBursts: return "Photo Cull"
         case .organize: return "Organize Library"
         }
     }
@@ -32,11 +32,12 @@ enum FotocopyWorkspace: String, CaseIterable, Identifiable {
     }
 }
 
-/// An individual burst is the selectable leaf within Cull. App-level tasks
-/// render their active state independently, so Cull can remain active while a
-/// burst is selected below it.
+/// A focused review target is selectable beneath Cull. App-level tasks render
+/// their active state independently, so Cull can remain active while a burst
+/// or the single-frame queue is selected below it.
 enum FotocopySidebarDestination: Hashable {
     case burst(URL)
+    case singleFrames
 }
 
 /// Keeps Fotocopy file-first: Import and Cull are two views over ordinary
@@ -86,7 +87,7 @@ struct FotocopyShellView: View {
                             .labelStyle(.titleAndIcon)
                             .controlSize(.small)
                             .buttonStyle(.bordered)
-                            .help("Cancel the current burst scan")
+                            .help("Cancel the current photo scan")
                         } else if cullModel.folderURL != nil {
                             Button {
                                 cullModel.scan()
@@ -97,7 +98,7 @@ struct FotocopyShellView: View {
                             .controlSize(.small)
                             .buttonStyle(.bordered)
                             .disabled(cullModel.isMoving)
-                            .help("Scan this folder again for bursts and refresh the whole-library summary")
+                            .help("Scan this folder again for bursts and single frames, then refresh the whole-library summary")
                         }
                     }
                 }
@@ -183,12 +184,19 @@ struct FotocopyShellView: View {
             cullModel.destination = .bursts
             cullModel.selectedBurstID = burstID
             cullModel.syncSelectedFrame()
+        case .singleFrames:
+            workspace = .cullBursts
+            cullModel.showSingleFrameCulling()
         }
     }
 
     private func synchronizeSidebarSelectionWithWorkspace() {
         let storedWorkspace = workspace
         if storedWorkspace == .cullBursts {
+            if cullModel.destination == .singleFrames {
+                sidebarSelection = .singleFrames
+                return
+            }
             if let burstID = cullModel.selectedBurstID {
                 sidebarSelection = .burst(burstID)
                 return
@@ -206,10 +214,6 @@ struct FotocopyShellView: View {
         withAnimation(.easeInOut(duration: 0.16)) {
             proxy.scrollTo(burstID, anchor: .center)
         }
-    }
-
-    private var currentCullSidebarDestination: FotocopySidebarDestination? {
-        cullModel.selectedBurstID.map(FotocopySidebarDestination.burst)
     }
 
     private func activateCull() {

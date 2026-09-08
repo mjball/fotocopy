@@ -56,6 +56,20 @@ import Testing
     #expect(result.singles.count == 2)
 }
 
+@Test func singleFrameFiltersSeparateFilesystemDerivedDecisions() {
+    #expect(SingleFrameReviewFilter.undecided.includes(nil))
+    #expect(!SingleFrameReviewFilter.undecided.includes(.select))
+    #expect(!SingleFrameReviewFilter.undecided.includes(.reject))
+
+    #expect(SingleFrameReviewFilter.kept.includes(.select))
+    #expect(!SingleFrameReviewFilter.kept.includes(.reject))
+    #expect(SingleFrameReviewFilter.rejected.includes(.reject))
+    #expect(!SingleFrameReviewFilter.rejected.includes(.select))
+    #expect(SingleFrameReviewFilter.all.includes(nil))
+    #expect(SingleFrameReviewFilter.all.includes(.select))
+    #expect(SingleFrameReviewFilter.all.includes(.reject))
+}
+
 @Test func collisionSuffixUsesOriginalCameraSequenceNumber() {
     #expect(BurstGroupingEngine.sequenceNumber(in: URL(fileURLWithPath: "/tmp/BL5A2496_1.CR3")) == 2496)
     #expect(BurstGroupingEngine.sequenceNumber(in: URL(fileURLWithPath: "/tmp/IMG_7422.CR3")) == 7422)

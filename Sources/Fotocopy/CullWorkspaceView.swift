@@ -28,26 +28,38 @@ struct CullWorkspaceView: View {
     private var detail: some View {
         if model.isScanning {
             ContentUnavailableView(
-                "Finding bursts",
+                "Finding photos",
                 systemImage: "rectangle.stack.badge.play",
-                description: Text("Fotocopy reads this date folder plus Keeps and Rejects, then rebuilds your burst review from the files on disk."))
-        } else if let burst = model.selectedBurst {
+                description: Text("Fotocopy reads this date folder plus Keeps and Rejects, then rebuilds burst and single-frame review from the files on disk."))
+        } else if model.destination == .bursts, let burst = model.selectedBurst {
             BurstReviewView(burst: burst, model: model, layout: layout)
+        } else if model.destination == .singleFrames, let frame = model.selectedSingleFrame {
+            SingleFrameReviewView(frame: frame, model: model, layout: layout)
+        } else if model.destination == .singleFrames, model.scanResult != nil {
+            ContentUnavailableView(
+                "No \(model.singleFrameFilter.title.lowercased()) single frames",
+                systemImage: "checkmark.circle",
+                description: Text("Choose another filter to revisit your decisions, or rescan after changing files in Finder."))
         } else if let scan = model.scanResult, scan.cr3Count == 0 {
             ContentUnavailableView(
                 "No CR3 files in this folder",
                 systemImage: "camera.metering.none",
                 description: Text("Cull looks for CR3 files in this destination date folder, plus its Keeps and Rejects subfolders."))
+        } else if let scan = model.scanResult, scan.bursts.isEmpty, scan.singleFrames.isEmpty {
+            ContentUnavailableView(
+                "No photos found for review",
+                systemImage: "rectangle.stack",
+                description: Text("Fotocopy found no CR3 files it can group or review in this date folder."))
         } else if let scan = model.scanResult, scan.bursts.isEmpty {
             ContentUnavailableView(
-                "No bursts found",
-                systemImage: "rectangle.stack",
-                description: Text("Fotocopy kept the grouping conservative. Try another destination day folder or inspect the single frames in Finder."))
+                "Single frames ready",
+                systemImage: "photo.on.rectangle",
+                description: Text("Select Review single frames in the sidebar to keep or reject the \(scan.singleFrames.count) standalone \(scan.singleFrames.count == 1 ? "photo" : "photos")."))
         } else {
             ContentUnavailableView(
                 "Choose a destination folder",
                 systemImage: "folder.badge.magnifyingglass",
-                description: Text("It will group consecutive CR3 captures for manual review, without creating a library."))
+                description: Text("It will group consecutive CR3 captures and queue standalone photos for manual review, without creating a library."))
         }
     }
 
@@ -118,8 +130,21 @@ struct CullSidebarSections: View {
 
             if !scan.singleFrames.isEmpty {
                 Section("Single frames") {
-                    Text("\(scan.singleFrames.count) not grouped into a burst")
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Review single frames")
+                            Text(singleFrameSummary(scan))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        if model.undecidedSingleFrameCount == 0 {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .accessibilityLabel("All single frames reviewed")
+                        }
+                    }
+                    .tag(FotocopySidebarDestination.singleFrames)
                 }
             }
         }
@@ -194,6 +219,12 @@ struct CullSidebarSections: View {
         }
         return formatter.string(from: start)
     }
+
+    private func singleFrameSummary(_ scan: CullFolderScan) -> String {
+        let total = scan.singleFrames.count
+        let undecided = model.undecidedSingleFrameCount
+        return "\(total) \(total == 1 ? "frame" : "frames") · \(undecided) undecided"
+    }
 }
 
 /// An outline means a burst still has undecided frames; a filled glyph means
@@ -242,6 +273,339 @@ private struct BurstDecisionStatusIcon: View {
             .foregroundStyle(color)
             .accessibilityLabel(accessibilityDescription)
             .help(accessibilityDescription)
+    }
+}
+
+/// A single-frame review deliberately keeps the familiar cull viewer while
+/// omitting burst semantics. The active filter is a queue: Keep and Reject
+/// advance to the next matching frame, while revisiting Keeps or Rejects still
+/// allows a decision to be cleared.
+private struct SingleFrameReviewView: View {
+    let frame: CullPhoto
+    @Bindable var model: CullViewModel
+    let layout: CullReviewLayout
+    @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
+    @State private var viewport = CullPreviewViewport()
+
+    private var visibleFrames: [CullPhoto] { model.filteredSingleFrames }
+
+    private var framePosition: Int {
+        (visibleFrames.firstIndex { $0.url == frame.url } ?? 0) + 1
+    }
+
+    private var progressLabel: String {
+        "\(framePosition) of \(visibleFrames.count) · \(model.undecidedSingleFrameCount) undecided"
+    }
+
+    var body: some View {
+        Group {
+            switch layout {
+            case .browse:
+                ScrollView { browseContent }
+            case .review:
+                compactContent
+            case .focus:
+                focusContent
+            }
+        }
+        .background {
+            CullNavigationKeyHandler(
+                moveFrame: { model.moveSelectedSingleFrame(by: $0) },
+                moveBurst: { _ in },
+                keepCurrentFrame: { model.keepSelectedFrame() },
+                keepCurrentAndRejectRest: { },
+                rejectCurrentFrame: { model.rejectSelectedFrame() },
+                rejectBurst: { }
+            )
+            .frame(width: 0, height: 0)
+        }
+        .onChange(of: frame.url) { viewport = CullPreviewViewport() }
+        .task(id: frame.url) {
+            model.loadCameraAFTarget(for: frame)
+            await Task.detached(priority: .utility) {
+                CullPreviewCache.shared.prefetch([frame.url])
+            }.value
+        }
+    }
+
+    private var browseContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            standardHeader
+            HStack(alignment: .top, spacing: 18) {
+                preview
+                    .frame(maxWidth: .infinity, minHeight: 540, maxHeight: 540)
+                inspector
+            }
+            filmstrip
+            moveStatus
+        }
+        .padding(24)
+    }
+
+    private var compactContent: some View {
+        VStack(spacing: 10) {
+            compactHeader
+            preview
+                .padding(.horizontal, 14)
+            filmstrip
+        }
+        .padding(.vertical, 12)
+    }
+
+    private var focusContent: some View {
+        ZStack(alignment: .bottom) {
+            preview
+                .clipShape(Rectangle())
+            VStack(spacing: 0) {
+                compactHeader
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
+                    .background(
+                        LinearGradient(
+                            colors: [.black.opacity(0.76), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                Spacer()
+                filmstrip
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.68))
+            }
+        }
+    }
+
+    private var standardHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Single frames")
+                    .font(.title3.weight(.semibold))
+                Text(progressLabel)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            filterPicker
+            Button("Reveal Selected") { model.revealSelectedFrame() }
+        }
+    }
+
+    private var compactHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(frame.filename)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(progressLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            filterPicker
+            compactDecisionControls
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var filterPicker: some View {
+        Picker("Single-frame filter", selection: $model.singleFrameFilter) {
+            ForEach(SingleFrameReviewFilter.allCases) { filter in
+                Text(filter.title).tag(filter)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .onChange(of: model.singleFrameFilter) {
+            model.selectFirstSingleFrameMatchingFilter()
+        }
+    }
+
+    private var preview: some View {
+        CullInspectionPreviewView(
+            url: frame.url,
+            inspectionPoint: model.inspectionPoint,
+            cameraAFTarget: showsCameraAFTarget ? model.cameraAFTarget(for: frame.url) : nil,
+            isPickingInspectionPoint: model.isPickingInspectionPoint,
+            onInspectionPointSelected: model.setInspectionPoint,
+            viewport: $viewport
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.black, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var inspector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(frame.filename)
+                .font(.headline)
+            Text(captureLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+            decisionControls
+
+            Divider()
+            cameraAFControls
+
+            Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
+                model.beginPickingInspectionPoint()
+            }
+            .buttonStyle(.bordered)
+
+            if model.inspectionSource != nil {
+                Button("Clear inspection target") { model.clearInspectionPoint() }
+                    .buttonStyle(.link)
+            }
+
+            Text(inspectionHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Keep and Reject move the raw and its sidecars immediately. Undo returns the latest move; nothing is deleted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+            CullLibraryStatisticsInspector(model: model)
+        }
+        .frame(width: 230, alignment: .leading)
+        .frame(minHeight: 540, maxHeight: 540, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var decisionControls: some View {
+        if model.isKeeping(frame.url) {
+            Button("Kept — undo") { model.clearSelectedFrameDisposition() }
+                .buttonStyle(.borderedProminent)
+        } else {
+            Button("Keep") { model.keepSelectedFrame() }
+                .buttonStyle(.borderedProminent)
+        }
+
+        if model.isRejecting(frame.url) {
+            Button("Rejected — undo") { model.clearSelectedFrameDisposition() }
+                .buttonStyle(.bordered)
+        } else {
+            Button("Reject") { model.rejectSelectedFrame() }
+                .buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder
+    private var cameraAFControls: some View {
+        if model.isLoadingCameraAFTarget(for: frame.url) {
+            Label("Reading camera AF data…", systemImage: "hourglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if let target = model.cameraAFTarget(for: frame.url) {
+            Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if !model.isUsingCameraAFTarget {
+                Button("Use camera AF target") { model.useCameraAFTarget() }
+                    .buttonStyle(.bordered)
+            }
+        } else if model.hasLoadedCameraAFTarget(for: frame.url) {
+            Text("No active camera AF target recorded")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var compactDecisionControls: some View {
+        HStack(spacing: 7) {
+            Button(model.isKeeping(frame.url) ? "Kept" : "Keep") {
+                model.isKeeping(frame.url) ? model.clearSelectedFrameDisposition() : model.keepSelectedFrame()
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button(model.isRejecting(frame.url) ? "Rejected" : "Reject") {
+                model.isRejecting(frame.url) ? model.clearSelectedFrameDisposition() : model.rejectSelectedFrame()
+            }
+            .buttonStyle(.bordered)
+        }
+        .controlSize(.small)
+        .disabled(model.isMoving)
+    }
+
+    private var filmstrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 9) {
+                    ForEach(visibleFrames) { candidate in
+                        Button { model.selectSingleFrame(candidate.url) } label: {
+                            ZStack(alignment: .bottomLeading) {
+                                CullPreviewView(url: candidate.url, size: .thumbnail)
+                                    .frame(width: 96, height: 70)
+                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                if model.isKeeping(candidate.url) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .padding(4)
+                                } else if model.isRejecting(candidate.url) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.red)
+                                        .padding(4)
+                                }
+                            }
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(model.selectedFrameURL == candidate.url ? Color.accentColor : Color.clear, lineWidth: 3)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(candidate.filename)
+                        .id(candidate.url)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 16)
+            }
+            .task(id: model.selectedFrameURL) {
+                guard let selectedFrameURL = model.selectedFrameURL else { return }
+                await Task.yield()
+                guard !Task.isCancelled, model.selectedFrameURL == selectedFrameURL else { return }
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    proxy.scrollTo(selectedFrameURL, anchor: .center)
+                }
+            }
+        }
+        .frame(height: 76)
+    }
+
+    private var moveStatus: some View {
+        HStack(spacing: 10) {
+            if model.isMoving {
+                Label("Moving cull frame…", systemImage: "arrow.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let summary = model.lastMoveSummary {
+                Label(summary, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("Keep or Reject to review the next frame.", systemImage: "hand.point.up.left")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.canUndoLastMove {
+                Button("Undo") { model.undoLastMove() }
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var captureLabel: String {
+        frame.captureDate?.formatted(date: .omitted, time: .standard) ?? "No capture time"
+    }
+
+    private var inspectionHint: String {
+        if model.isPickingInspectionPoint { return "Click the subject detail you want to inspect." }
+        if model.isUsingCameraAFTarget { return "Uses this frame’s camera-recorded AF target." }
+        return "Use a camera AF target or pick a detail manually. Fotocopy never chooses or discards a photo for you."
     }
 }
 
@@ -1500,6 +1864,7 @@ final class CullViewModel {
     private(set) var nextCullFolderURL: URL?
     var selectedBurstID: URL?
     var selectedFrameURL: URL?
+    var singleFrameFilter: SingleFrameReviewFilter = .undecided
     var inspectionSource: CullInspectionSource?
     var isPickingInspectionPoint = false
     var libraryDecisionScan: CullLibraryDecisionScan?
@@ -1538,6 +1903,21 @@ final class CullViewModel {
 
     var selectedBurst: PhotoBurst? {
         scanResult?.bursts.first { $0.id == selectedBurstID }
+    }
+
+    var filteredSingleFrames: [CullPhoto] {
+        guard let frames = scanResult?.singleFrames else { return [] }
+        return frames.filter { singleFrameFilter.includes(dispositions[$0.url]) }
+    }
+
+    var selectedSingleFrame: CullPhoto? {
+        guard destination == .singleFrames,
+              let selectedFrameURL else { return nil }
+        return filteredSingleFrames.first { $0.url == selectedFrameURL }
+    }
+
+    var undecidedSingleFrameCount: Int {
+        scanResult?.singleFrames.count { dispositions[$0.url] == nil } ?? 0
     }
 
     var canUndoLastMove: Bool { lastUndoOperation != nil && !isMoving }
@@ -1610,6 +1990,19 @@ final class CullViewModel {
         destination = .bursts
         resumeLastScanIfNeeded()
         refreshLibraryImageStatisticsIfNeeded()
+        if selectedBurst == nil, let firstBurst = scanResult?.bursts.first {
+            selectBurst(withID: firstBurst.id)
+        }
+    }
+
+    func showSingleFrameCulling() {
+        destination = .singleFrames
+        selectedBurstID = nil
+        inspectionSource = nil
+        isPickingInspectionPoint = false
+        resumeLastScanIfNeeded()
+        refreshLibraryImageStatisticsIfNeeded()
+        selectFirstSingleFrameMatchingFilter()
     }
 
     func refreshLibraryImageStatisticsIfNeeded() {
@@ -1826,8 +2219,13 @@ final class CullViewModel {
                 guard !Task.isCancelled else { return }
                 scanResult = result
                 dispositions = Self.onDiskDispositions(in: result)
-                selectedBurstID = result.bursts.first?.id
-                selectedFrameURL = result.bursts.first?.frames.first?.url
+                if destination == .singleFrames {
+                    selectedBurstID = nil
+                    selectFirstSingleFrameMatchingFilter()
+                } else {
+                    selectedBurstID = result.bursts.first?.id
+                    selectedFrameURL = result.bursts.first?.frames.first?.url
+                }
             } catch is CancellationError {
                 // A new scan replaced this one.
             } catch {
@@ -1903,6 +2301,31 @@ final class CullViewModel {
 
     func selectFrame(_ url: URL) {
         selectedFrameURL = url
+        automaticallyUseCameraAFTargetForSelectedFrame()
+    }
+
+    func selectSingleFrame(_ url: URL) {
+        guard filteredSingleFrames.contains(where: { $0.url == url }) else { return }
+        selectedFrameURL = url
+        inspectionSource = nil
+        isPickingInspectionPoint = false
+        automaticallyUseCameraAFTargetForSelectedFrame()
+    }
+
+    func selectFirstSingleFrameMatchingFilter() {
+        guard destination == .singleFrames else { return }
+        selectedFrameURL = filteredSingleFrames.first?.url
+        inspectionSource = nil
+        isPickingInspectionPoint = false
+    }
+
+    func moveSelectedSingleFrame(by offset: Int) {
+        guard !filteredSingleFrames.isEmpty else { return }
+        selectedFrameURL = CullFrameNavigation.frameURL(
+            in: filteredSingleFrames,
+            adjacentTo: selectedFrameURL,
+            offset: offset
+        )
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
@@ -2001,6 +2424,29 @@ final class CullViewModel {
         }
     }
 
+    func loadCameraAFTarget(for frame: CullPhoto) {
+        let url = frame.url
+        guard !loadedCameraAFTargetURLs.contains(url), !loadingCameraAFTargetURLs.contains(url) else {
+            automaticallyUseCameraAFTargetForSelectedFrame()
+            return
+        }
+
+        loadingCameraAFTargetURLs.insert(url)
+        Task { [weak self] in
+            let results = await Self.readCameraAFTargets(from: [url])
+            guard !Task.isCancelled, let self else { return }
+            for (resultURL, target) in results {
+                self.loadedCameraAFTargetURLs.insert(resultURL)
+                self.loadingCameraAFTargetURLs.remove(resultURL)
+                if let target {
+                    self.cameraAFTargets[resultURL] = target
+                }
+            }
+            guard self.destination == .singleFrames, self.selectedFrameURL == url else { return }
+            self.automaticallyUseCameraAFTargetForSelectedFrame()
+        }
+    }
+
     private func automaticallyUseCameraAFTarget(for burst: PhotoBurst) {
         guard selectedBurstID == burst.id else { return }
         automaticallyUseCameraAFTargetForSelectedFrame()
@@ -2064,12 +2510,27 @@ final class CullViewModel {
     /// a prior decision back into an unmarked frame.
     func keepSelectedFrame() {
         guard let selectedFrameURL else { return }
-        moveDisposition(of: selectedFrameURL, to: .select, advanceAfterMove: true)
+        moveDisposition(
+            of: selectedFrameURL,
+            to: .select,
+            advanceAfterMove: destination != .singleFrames,
+            advanceAfterMovingSingleFrame: destination == .singleFrames ? selectedFrameURL : nil
+        )
     }
 
     func rejectSelectedFrame() {
         guard let selectedFrameURL else { return }
-        moveDisposition(of: selectedFrameURL, to: .reject, advanceAfterMove: true)
+        moveDisposition(
+            of: selectedFrameURL,
+            to: .reject,
+            advanceAfterMove: destination != .singleFrames,
+            advanceAfterMovingSingleFrame: destination == .singleFrames ? selectedFrameURL : nil
+        )
+    }
+
+    func clearSelectedFrameDisposition() {
+        guard let selectedFrameURL else { return }
+        moveDisposition(of: selectedFrameURL, to: nil)
     }
 
     func keepSelectedAndRejectRest(in burst: PhotoBurst) {
@@ -2116,11 +2577,13 @@ final class CullViewModel {
     private func moveDisposition(
         of url: URL,
         to disposition: CullDisposition?,
-        advanceAfterMove: Bool = false
+        advanceAfterMove: Bool = false,
+        advanceAfterMovingSingleFrame: URL? = nil
     ) {
         moveDispositions(
             [CullFrameDispositionState(frameURL: url, disposition: disposition)],
-            advanceAfterMoving: advanceAfterMove ? url : nil
+            advanceAfterMoving: advanceAfterMove ? url : nil,
+            advanceAfterMovingSingleFrame: advanceAfterMovingSingleFrame
         )
     }
 
@@ -2128,6 +2591,7 @@ final class CullViewModel {
         _ requestedStates: [CullFrameDispositionState],
         recordsUndo: Bool = true,
         advanceAfterMoving frameURL: URL? = nil,
+        advanceAfterMovingSingleFrame singleFrameURL: URL? = nil,
         advanceAfterMovingBurst burstID: URL? = nil
     ) {
         guard let folderURL, !isMoving else { return }
@@ -2138,6 +2602,9 @@ final class CullViewModel {
         guard !changedStates.isEmpty else {
             if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
                 selectedFrameURL = nextFrameURL
+            }
+            if let singleFrameURL {
+                advanceToNextSingleFrame(after: singleFrameURL, replacements: [:])
             }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectBurst(withID: nextBurstID)
@@ -2158,6 +2625,9 @@ final class CullViewModel {
         guard relocationCount > 0 else {
             if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
                 selectedFrameURL = nextFrameURL
+            }
+            if let singleFrameURL {
+                advanceToNextSingleFrame(after: singleFrameURL, replacements: [:])
             }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectBurst(withID: nextBurstID)
@@ -2189,6 +2659,15 @@ final class CullViewModel {
                         uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
                     )
                     self.selectedFrameURL = destinationBySource[nextFrameURL] ?? nextFrameURL
+                }
+                if let singleFrameURL {
+                    let destinationBySource = Dictionary(
+                        uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
+                    )
+                    self.advanceToNextSingleFrame(
+                        after: singleFrameURL,
+                        replacements: destinationBySource
+                    )
                 }
                 if let nextBurstID {
                     self.selectBurst(withID: nextBurstID)
@@ -2237,6 +2716,39 @@ final class CullViewModel {
             adjacentTo: frameURL,
             offset: 1
         )
+    }
+
+    /// Advance through the active filter after a single-frame decision. It
+    /// wraps only to locate another matching frame; when no frame matches, the
+    /// empty-state confirms that this queue is complete.
+    private func advanceToNextSingleFrame(after sourceURL: URL, replacements: [URL: URL]) {
+        guard destination == .singleFrames,
+              let allFrames = scanResult?.singleFrames,
+              !allFrames.isEmpty else {
+            return
+        }
+
+        let currentURL = replacements[sourceURL] ?? sourceURL
+        let currentIndex = allFrames.firstIndex { $0.url == currentURL } ?? -1
+        guard currentIndex >= 0 else {
+            selectedFrameURL = filteredSingleFrames.first?.url
+            return
+        }
+
+        for offset in 1...allFrames.count {
+            let candidate = allFrames[(currentIndex + offset) % allFrames.count]
+            if singleFrameFilter.includes(dispositions[candidate.url]) {
+                selectedFrameURL = candidate.url
+                inspectionSource = nil
+                isPickingInspectionPoint = false
+                automaticallyUseCameraAFTargetForSelectedFrame()
+                return
+            }
+        }
+
+        selectedFrameURL = nil
+        inspectionSource = nil
+        isPickingInspectionPoint = false
     }
 
     private func nextBurstID(after burstID: URL) -> URL? {

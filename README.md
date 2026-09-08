@@ -1,6 +1,6 @@
 # Fotocopy
 
-Fotocopy is a file-first macOS app for importing, culling, and organizing photos on ordinary drives. It copies media directly into a simple date-based folder hierarchy, helps you review Canon CR3 bursts, and records your choices by moving files into normal `Keeps` and `Rejects` folders—not a proprietary photo library.
+Fotocopy is a file-first macOS app for importing, culling, and organizing photos on ordinary drives. It copies media directly into a simple date-based folder hierarchy, helps you review Canon CR3 bursts and standalone photos, and records your choices by moving files into normal `Keeps` and `Rejects` folders—not a proprietary photo library.
 
 Your photos stay portable: browse them in Finder, edit them in the tools you already use, and move them without an export step. Fotocopy assists with fast review and safe file operations, but it never chooses what to keep or permanently deletes an image for you.
 
@@ -16,13 +16,14 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - Recovers from an accidentally selected drive root by looking briefly for an existing Fotocopy manifest before scanning media; a single matching library is selected automatically, while multiple matches require your choice.
 - Can open and eject source or destination volumes as part of the import flow.
 
-### Cull Canon CR3 bursts quickly
+### Cull Canon CR3 bursts and single frames
 
-- Scans a chosen date folder and its `Keeps`/`Rejects` subfolders to rebuild conservative consecutive-capture bursts from the files on disk.
+- Scans a chosen date folder and its `Keeps`/`Rejects` subfolders to rebuild conservative consecutive-capture bursts and identify standalone frames from the files on disk.
+- Opens standalone frames as their own review queue, with Undecided, All, Kept, and Rejected filters, a progress count, thumbnails, and the same immediate Keep/Reject and Undo workflow as burst review.
 - Displays fast embedded JPEG previews, with full-resolution preview loading when you zoom; pinch, double-click, and pan directly in the main viewer. The Frames filmstrip and active detail-crop strip follow the selected frame during keyboard navigation.
 - Offers Full, Compact, and Minimal review layouts, plus a filmstrip, per-frame Keep/Reject badges, and filesystem-derived burst status: no icon before a decision, an outlined green check after a keep or outlined red X after rejects only while review is in progress, then a filled green check when the finished burst has a keeper or a filled red X when every frame is rejected.
 - Reads supported Canon AF metadata and can overlay the camera-recorded AF target or use it as the detail-comparison point. When a selected frame records an active target, Fotocopy automatically activates the matching crop comparison while preserving a manual point if you chose one.
-- Provides keyboard-driven review: arrow keys navigate frames and bursts, keeping the selected burst visible in the sidebar; `⌘[`/`⌘]` move to the previous or next date folder with CR3s; `K`/`X` keep or reject the current frame; `⇧K` keeps the current frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
+- Provides keyboard-driven review: arrow keys navigate frames and bursts (or frames in the single-frame queue), keeping the selected burst visible in the sidebar; `⌘[`/`⌘]` move to the previous or next date folder with CR3s; `K`/`X` keep or reject the current frame; `⇧K` keeps the current burst frame and rejects the rest; `⇧X` rejects the burst. The same actions are available in the native **Cull** menu.
 - Applies choices immediately by moving the CR3 and its paired XMP/ON1 sidecars into `Keeps` or `Rejects`. The latest move can be undone, and a later scan or relaunch restores the decision badges from the folder structure.
 - Shows a live, whole-library summary in the Full-layout inspector: image count and storage split between unrated, kept, and rejected photos. Keep, Reject, and Undo update the summary immediately; **Rescan** refreshes it after external Finder changes.
 

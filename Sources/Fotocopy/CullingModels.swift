@@ -242,11 +242,42 @@ enum CullReviewLayout: String, CaseIterable, Identifiable {
     }
 }
 
-/// Cull has a focused per-day burst review and a library-wide, filesystem
-/// backed decision review. Neither owns a separate photo catalog.
+/// Cull has focused per-day burst and single-frame review plus a library-wide,
+/// filesystem-backed decision review. Neither owns a separate photo catalog.
 enum CullDestination: Hashable {
     case bursts
+    case singleFrames
     case libraryDecisions
+}
+
+/// Singles are a review queue, not miniature bursts. The filter controls both
+/// the thumbnails presented to the photographer and where Keep/Reject advances
+/// next; decisions themselves remain derived from the files' locations.
+enum SingleFrameReviewFilter: String, CaseIterable, Identifiable {
+    case undecided
+    case all
+    case kept
+    case rejected
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .undecided: return "Undecided"
+        case .all: return "All"
+        case .kept: return "Kept"
+        case .rejected: return "Rejected"
+        }
+    }
+
+    func includes(_ disposition: CullDisposition?) -> Bool {
+        switch self {
+        case .undecided: return disposition == nil
+        case .all: return true
+        case .kept: return disposition == .select
+        case .rejected: return disposition == .reject
+        }
+    }
 }
 
 /// Burst navigation mirrors frame navigation: the endpoints deliberately do
