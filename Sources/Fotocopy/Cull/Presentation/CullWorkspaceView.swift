@@ -717,7 +717,8 @@ private struct SingleFrameReviewView: View {
                         Button {
                             model.selectSingleFrame(
                                 candidate.url,
-                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command),
+                                selectingQuickExportRange: NSEvent.modifierFlags.contains(.shift)
                             )
                         } label: {
                             ZStack(alignment: .bottomLeading) {
@@ -737,7 +738,6 @@ private struct SingleFrameReviewView: View {
                             }
                             .overlay {
                                 CullQuickExportSelectionBorder(
-                                    isFocused: model.selectedFrameURL == candidate.url,
                                     isSelectedForExport: model.isQuickExportSelected(candidate.url),
                                     cornerRadius: 6
                                 )
@@ -901,7 +901,8 @@ private struct BurstReviewView: View {
                         Button {
                             model.selectFrame(
                                 frame.url,
-                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command),
+                                selectingQuickExportRange: NSEvent.modifierFlags.contains(.shift)
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 5) {
@@ -911,7 +912,6 @@ private struct BurstReviewView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                                     .overlay {
                                         CullQuickExportSelectionBorder(
-                                            isFocused: model.selectedFrameURL == frame.url,
                                             isSelectedForExport: model.isQuickExportSelected(frame.url),
                                             cornerRadius: 6
                                         )
@@ -1309,7 +1309,8 @@ private struct BurstReviewView: View {
                     Button {
                         model.selectFrame(
                             frame.url,
-                            extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                            extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command),
+                            selectingQuickExportRange: NSEvent.modifierFlags.contains(.shift)
                         )
                     } label: {
                         ZStack(alignment: .bottomLeading) {
@@ -1329,7 +1330,6 @@ private struct BurstReviewView: View {
                         }
                         .overlay {
                             CullQuickExportSelectionBorder(
-                                isFocused: model.selectedFrameURL == frame.url,
                                 isSelectedForExport: model.isQuickExportSelected(frame.url),
                                 cornerRadius: 6
                             )
@@ -1918,7 +1918,8 @@ private struct CullInspectionCropSection: View {
                         Button {
                             model.selectFrame(
                                 frame.url,
-                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command)
+                                extendingQuickExportSelection: NSEvent.modifierFlags.contains(.command),
+                                selectingQuickExportRange: NSEvent.modifierFlags.contains(.shift)
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 5) {
@@ -2010,7 +2011,6 @@ private struct CullInspectionCropSection: View {
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {
             CullQuickExportSelectionBorder(
-                isFocused: model.selectedFrameURL == frame.url,
                 isSelectedForExport: model.isQuickExportSelected(frame.url),
                 cornerRadius: 7
             )
@@ -2188,24 +2188,14 @@ private struct CullFrameDispositionState: Sendable {
     let disposition: CullDisposition?
 }
 
-/// Blue identifies the currently reviewed frame; the inset orange border is
-/// the persistent Quick Export selection. Keeping both visible makes it clear
-/// that command-click can select several frames while one remains in focus.
+/// Blue identifies every frame selected for Quick Export.
 private struct CullQuickExportSelectionBorder: View {
-    let isFocused: Bool
     let isSelectedForExport: Bool
     let cornerRadius: CGFloat
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(isFocused ? Color.accentColor : Color.clear, lineWidth: 3)
-            if isSelectedForExport {
-                RoundedRectangle(cornerRadius: max(0, cornerRadius - 2))
-                    .stroke(.orange, lineWidth: 2)
-                    .padding(5)
-            }
-        }
+        RoundedRectangle(cornerRadius: cornerRadius)
+            .stroke(isSelectedForExport ? Color.accentColor : Color.clear, lineWidth: 3)
     }
 }
 
@@ -2589,17 +2579,39 @@ final class CullViewModel {
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
-    func selectFrame(_ url: URL, extendingQuickExportSelection: Bool = false) {
+    func selectFrame(
+        _ url: URL,
+        extendingQuickExportSelection: Bool = false,
+        selectingQuickExportRange: Bool = false
+    ) {
+        guard let selectedBurst,
+              selectedBurst.frames.contains(where: { $0.url == url }) else {
+            return
+        }
         selectedFrameURL = url
-        quickExportSelection.select(url, extendingSelection: extendingQuickExportSelection)
+        quickExportSelection.select(
+            url,
+            in: selectedBurst.frames.map(\.url),
+            extendingSelection: extendingQuickExportSelection,
+            selectingRange: selectingQuickExportRange
+        )
         automaticallyUseCameraAFTargetForSelectedFrame()
     }
 
-    func selectSingleFrame(_ url: URL, extendingQuickExportSelection: Bool = false) {
+    func selectSingleFrame(
+        _ url: URL,
+        extendingQuickExportSelection: Bool = false,
+        selectingQuickExportRange: Bool = false
+    ) {
         guard isReviewingSingles,
               filteredSingleFrames.contains(where: { $0.url == url }) else { return }
         selectedFrameURL = url
-        quickExportSelection.select(url, extendingSelection: extendingQuickExportSelection)
+        quickExportSelection.select(
+            url,
+            in: filteredSingleFrames.map(\.url),
+            extendingSelection: extendingQuickExportSelection,
+            selectingRange: selectingQuickExportRange
+        )
         inspectionSource = nil
         isPickingInspectionPoint = false
         automaticallyUseCameraAFTargetForSelectedFrame()
