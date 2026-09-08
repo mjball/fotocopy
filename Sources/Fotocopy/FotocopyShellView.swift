@@ -169,7 +169,10 @@ struct FotocopyShellView: View {
         case .cullBursts:
             CullWorkspaceView(model: cullModel, layout: $cullReviewLayout)
         case .organize:
-            CullLibraryDecisionsView(model: cullModel)
+            CullLibraryDecisionsView(
+                library: cullModel.library,
+                openDate: { cullModel.requestUse(folder: $0.dateFolderURL) }
+            )
         }
     }
 

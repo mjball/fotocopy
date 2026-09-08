@@ -54,11 +54,11 @@ struct LibraryImageStatisticsHeader: View {
 /// distribution bar makes the state of a large library immediately scannable
 /// without repeating a tall, chart-like list beside the photo.
 struct CullLibraryStatisticsInspector: View {
-    @Bindable var model: CullViewModel
+    @Bindable var library: CullLibraryViewModel
 
     var body: some View {
         Group {
-            if let statistics = model.libraryImageStatistics {
+            if let statistics = library.imageStatistics {
                 VStack(alignment: .leading, spacing: 8) {
                     Divider()
                     Text("Library")
@@ -73,7 +73,7 @@ struct CullLibraryStatisticsInspector: View {
                         }
                     }
                 }
-            } else if model.isScanningLibraryImageStatistics {
+            } else if library.isScanningImageStatistics {
                 HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
@@ -81,7 +81,7 @@ struct CullLibraryStatisticsInspector: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            } else if let error = model.libraryImageStatisticsError {
+            } else if let error = library.imageStatisticsError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
