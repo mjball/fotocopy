@@ -411,7 +411,6 @@ private struct SingleFrameReviewView: View {
     @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
     @State private var previewHeightAtDragStart: Double?
     @State private var viewport = CullPreviewViewport()
-    @State private var isFocusAssistanceExpanded = false
 
     private let defaultPreviewHeight = 540.0
     private let minimumPreviewHeight = 360.0
@@ -557,7 +556,7 @@ private struct SingleFrameReviewView: View {
             decisionControls
 
             Divider()
-            focusAssistance
+            focusSection
 
             Spacer(minLength: 8)
             safetyHint
@@ -612,30 +611,30 @@ private struct SingleFrameReviewView: View {
         }
     }
 
-    private var focusAssistance: some View {
-        DisclosureGroup(isExpanded: $isFocusAssistanceExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                cameraAFControls
-                Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
-                    isFocusAssistanceExpanded = true
+    private var focusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Focus")
+                .font(.caption.weight(.semibold))
+            focusStatus
+
+            Button(model.isPickingInspectionPoint ? "Cancel picking" : "Pick detail…") {
+                if model.isPickingInspectionPoint {
+                    model.cancelPickingInspectionPoint()
+                } else {
                     model.beginPickingInspectionPoint()
                 }
-                .buttonStyle(.bordered)
-
-                if model.inspectionSource != nil {
-                    Button("Clear inspection target") { model.clearInspectionPoint() }
-                        .buttonStyle(.link)
-                }
             }
-            .padding(.top, 2)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Label("Focus assistance", systemImage: "viewfinder")
-                    .font(.caption.weight(.semibold))
-                Text(inspectionHint)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+
+            if shouldOfferCameraAF {
+                Button("Use AF target") { model.useCameraAFTarget() }
+                    .buttonStyle(.link)
+                    .help("Use camera AF target")
+                    .accessibilityLabel("Use camera AF target")
+            } else if shouldOfferManualClear {
+                Button("Clear focus point") { model.clearInspectionPoint() }
+                    .buttonStyle(.link)
             }
         }
     }
@@ -649,24 +648,44 @@ private struct SingleFrameReviewView: View {
     }
 
     @ViewBuilder
-    private var cameraAFControls: some View {
-        if model.isLoadingCameraAFTarget(for: frame.url) {
+    private var focusStatus: some View {
+        if model.isPickingInspectionPoint {
+            Label("Choose a detail in the preview", systemImage: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if model.inspectionPoint != nil {
+            Label("Manual focus point", systemImage: "circle.inset.filled")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tint)
+        } else if model.isLoadingCameraAFTarget(for: frame.url) {
             Label("Reading camera AF data…", systemImage: "hourglass")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else if let target = model.cameraAFTarget(for: frame.url) {
-            Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            if !model.isUsingCameraAFTarget {
-                Button("Use camera AF target") { model.useCameraAFTarget() }
-                    .buttonStyle(.bordered)
+            HStack(spacing: 6) {
+                Label("Camera AF target", systemImage: "viewfinder")
+                Spacer(minLength: 0)
+                Label(target.state.displayName, systemImage: "circle.fill")
+                    .foregroundStyle(target.state == .focused ? .green : .secondary)
             }
+            .font(.caption.weight(.semibold))
         } else if model.hasLoadedCameraAFTarget(for: frame.url) {
             Text("No active camera AF target recorded")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var shouldOfferCameraAF: Bool {
+        !model.isPickingInspectionPoint &&
+            !model.isUsingCameraAFTarget &&
+            model.cameraAFTarget(for: frame.url) != nil
+    }
+
+    private var shouldOfferManualClear: Bool {
+        !model.isPickingInspectionPoint &&
+            model.inspectionPoint != nil &&
+            model.cameraAFTarget(for: frame.url) == nil
     }
 
     private var compactDecisionControls: some View {
@@ -758,12 +777,6 @@ private struct SingleFrameReviewView: View {
         frame.captureDate?.formatted(date: .omitted, time: .standard) ?? "No capture time"
     }
 
-    private var inspectionHint: String {
-        if model.isPickingInspectionPoint { return "Click the subject detail you want to inspect." }
-        if model.isUsingCameraAFTarget { return "Uses this frame’s camera-recorded AF target." }
-        return "Use a camera AF target or pick a detail manually. Fotocopy never chooses or discards a photo for you."
-    }
-
     private func resizePreview(by translation: CGFloat) {
         if previewHeightAtDragStart == nil {
             previewHeightAtDragStart = previewHeight
@@ -793,7 +806,6 @@ private struct BurstReviewView: View {
     @AppStorage(PreferenceKeys.cullShowsAFTarget) private var showsCameraAFTarget = true
     @State private var previewHeightAtDragStart: Double?
     @State private var viewport = CullPreviewViewport()
-    @State private var isFocusAssistanceExpanded = false
 
     private let defaultPreviewHeight = 540.0
     private let minimumPreviewHeight = 360.0
@@ -1015,7 +1027,7 @@ private struct BurstReviewView: View {
             decisionControls(for: frame)
 
             Divider()
-            focusAssistance(for: frame)
+            focusSection(for: frame)
 
             Spacer(minLength: 8)
             safetyHint
@@ -1069,39 +1081,47 @@ private struct BurstReviewView: View {
         .disabled(model.isMoving)
     }
 
-    private func focusAssistance(for frame: CullPhoto) -> some View {
-        DisclosureGroup(isExpanded: $isFocusAssistanceExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                cameraAFControls(for: frame)
-                Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
-                    isFocusAssistanceExpanded = true
+    private func focusSection(for frame: CullPhoto) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Focus")
+                .font(.caption.weight(.semibold))
+            focusStatus(for: frame)
+
+            Button(model.isPickingInspectionPoint ? "Cancel picking" : "Pick detail…") {
+                if model.isPickingInspectionPoint {
+                    model.cancelPickingInspectionPoint()
+                } else {
                     model.beginPickingInspectionPoint()
                 }
-                .buttonStyle(.bordered)
-
-                if model.inspectionSource != nil {
-                    Button("Clear inspection target") {
-                        model.clearInspectionPoint()
-                    }
-                    .buttonStyle(.link)
-                }
             }
-            .padding(.top, 2)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Label("Focus assistance", systemImage: "viewfinder")
-                    .font(.caption.weight(.semibold))
-                Text(inspectionHint(for: model))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+
+            if shouldOfferCameraAF(for: frame) {
+                Button("Use AF target") { model.useCameraAFTarget() }
+                    .buttonStyle(.link)
+                    .help("Use camera AF target")
+                    .accessibilityLabel("Use camera AF target")
+            } else if shouldOfferManualClear(for: frame) {
+                Button("Clear focus point") {
+                    model.clearInspectionPoint()
+                }
+                .buttonStyle(.link)
             }
         }
     }
 
     @ViewBuilder
-    private func cameraAFControls(for frame: CullPhoto) -> some View {
-        if model.isLoadingCameraAFTarget(for: frame.url) {
+    private func focusStatus(for frame: CullPhoto) -> some View {
+        if model.isPickingInspectionPoint {
+            Label("Choose a detail in the preview", systemImage: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if model.inspectionPoint != nil {
+            Label("Manual focus point", systemImage: "circle.inset.filled")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tint)
+        } else if model.isLoadingCameraAFTarget(for: frame.url) {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
@@ -1110,20 +1130,30 @@ private struct BurstReviewView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         } else if let target = model.cameraAFTarget(for: frame.url) {
-            Label("Camera AF target · \(target.state.displayName)", systemImage: "viewfinder")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            if !model.isUsingCameraAFTarget {
-                Button("Use camera AF target") {
-                    model.useCameraAFTarget()
-                }
-                .buttonStyle(.bordered)
+            HStack(spacing: 6) {
+                Label("Camera AF target", systemImage: "viewfinder")
+                Spacer(minLength: 0)
+                Label(target.state.displayName, systemImage: "circle.fill")
+                    .foregroundStyle(target.state == .focused ? .green : .secondary)
             }
+            .font(.caption.weight(.semibold))
         } else if model.hasLoadedCameraAFTarget(for: frame.url) {
             Text("No active camera AF target recorded")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func shouldOfferCameraAF(for frame: CullPhoto) -> Bool {
+        !model.isPickingInspectionPoint &&
+            !model.isUsingCameraAFTarget &&
+            model.cameraAFTarget(for: frame.url) != nil
+    }
+
+    private func shouldOfferManualClear(for frame: CullPhoto) -> Bool {
+        !model.isPickingInspectionPoint &&
+            model.inspectionPoint != nil &&
+            model.cameraAFTarget(for: frame.url) == nil
     }
 
     private var safetyHint: some View {
@@ -1234,8 +1264,12 @@ private struct BurstReviewView: View {
                 Button("Clear marks") { model.clearDispositions(in: burst) }
                 Divider()
                 Button("Reveal Selected") { model.revealSelectedFrame() }
-                Button(model.isPickingInspectionPoint ? "Click the preview…" : "Pick detail manually") {
-                    model.beginPickingInspectionPoint()
+                Button(model.isPickingInspectionPoint ? "Cancel picking" : "Pick detail…") {
+                    if model.isPickingInspectionPoint {
+                        model.cancelPickingInspectionPoint()
+                    } else {
+                        model.beginPickingInspectionPoint()
+                    }
                 }
                 if model.inspectionSource != nil {
                     Button("Clear inspection target") {
@@ -1434,6 +1468,7 @@ private struct CullInspectionPreviewView: View {
     @State private var fullPreview: NSImage?
     @State private var fullPreviewState: FullPreviewState = .idle
     @State private var fullPreviewRetryCount = 0
+    @State private var inspectionHoverLocation: CGPoint?
     @GestureState private var gestureMagnification: CGFloat = 1
     @GestureState private var gestureTranslation: CGSize = .zero
 
@@ -1498,6 +1533,8 @@ private struct CullInspectionPreviewView: View {
         .onChange(of: isPickingInspectionPoint) { _, isPicking in
             if isPicking {
                 viewport.zoom = 1
+            } else {
+                inspectionHoverLocation = nil
             }
         }
     }
@@ -1534,10 +1571,10 @@ private struct CullInspectionPreviewView: View {
 
                 if let inspectionPoint {
                     Circle()
-                        .stroke(.white, lineWidth: 2)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(.black.opacity(0.38)))
-                        .shadow(radius: 2)
+                        .stroke(Color.accentColor, lineWidth: 2)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.accentColor.opacity(0.18)))
+                        .shadow(color: Color.accentColor.opacity(0.5), radius: 4)
                         .position(
                             x: imageRect.minX + imageRect.width * CGFloat(inspectionPoint.x),
                             y: imageRect.minY + imageRect.height * CGFloat(inspectionPoint.y)
@@ -1563,7 +1600,24 @@ private struct CullInspectionPreviewView: View {
                 }
 
                 if isPickingInspectionPoint {
-                    Text("Click the detail to compare")
+                    if let inspectionHoverLocation {
+                        ZStack {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.18))
+                                .frame(width: 34, height: 34)
+                            Circle()
+                                .stroke(Color.accentColor, lineWidth: 2)
+                                .frame(width: 34, height: 34)
+                            Image(systemName: "magnifyingglass")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .shadow(color: Color.accentColor.opacity(0.45), radius: 5)
+                        .position(inspectionHoverLocation)
+                        .allowsHitTesting(false)
+                    }
+
+                    Label("Choose a detail to inspect", systemImage: "magnifyingglass")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 6)
@@ -1577,6 +1631,18 @@ private struct CullInspectionPreviewView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .clipped()
+            .onContinuousHover { phase in
+                guard isPickingInspectionPoint else {
+                    inspectionHoverLocation = nil
+                    return
+                }
+                switch phase {
+                case let .active(location):
+                    inspectionHoverLocation = imageRect.contains(location) ? location : nil
+                case .ended:
+                    inspectionHoverLocation = nil
+                }
+            }
             .gesture(
                 SpatialTapGesture()
                     .onEnded { value in

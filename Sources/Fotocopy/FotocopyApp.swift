@@ -339,7 +339,7 @@ private struct CullCommands: Commands {
             }
             .disabled(!canReviewFrame)
 
-            Button("Use Camera AF Target") {
+            Button("Use AF Target") {
                 model.useCameraAFTarget()
             }
             .disabled(!canUseCameraAFTarget)
