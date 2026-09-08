@@ -1498,7 +1498,10 @@ private struct CullInspectionPreviewView: View {
     @GestureState private var gestureTranslation: CGSize = .zero
 
     private var effectiveZoom: CGFloat {
-        min(max(viewport.zoom * gestureMagnification, 1), 6)
+        min(
+            max(viewport.zoom * gestureMagnification, CullPreviewViewport.minimumZoom),
+            CullPreviewViewport.maximumZoom
+        )
     }
 
     private var fullPreviewRequestID: String {
@@ -1557,7 +1560,7 @@ private struct CullInspectionPreviewView: View {
         }
         .onChange(of: isPickingInspectionPoint) { _, isPicking in
             if isPicking {
-                viewport.zoom = 1
+                viewport.zoom = CullPreviewViewport.minimumZoom
             } else {
                 inspectionHoverLocation = nil
             }
@@ -1688,7 +1691,7 @@ private struct CullInspectionPreviewView: View {
             .onTapGesture(count: 2) {
                 guard !isPickingInspectionPoint else { return }
                 withAnimation(.easeInOut(duration: 0.16)) {
-                    viewport.zoom = effectiveZoom > 1.02 ? 1 : 2
+                    viewport.zoom = CullPreviewViewport.zoomAfterDoubleClick(from: effectiveZoom)
                     viewport.center = clampedCenter(
                         viewport.center,
                         imageSize: CGSize(width: baseRect.width * viewport.zoom, height: baseRect.height * viewport.zoom),
@@ -1757,7 +1760,10 @@ private struct CullInspectionPreviewView: View {
             }
             .onEnded { value in
                 guard !isPickingInspectionPoint else { return }
-                viewport.zoom = min(max(viewport.zoom * value.magnification, 1), 6)
+                viewport.zoom = min(
+                    max(viewport.zoom * value.magnification, CullPreviewViewport.minimumZoom),
+                    CullPreviewViewport.maximumZoom
+                )
                 viewport.center = clampedCenter(
                     viewport.center,
                     imageSize: CGSize(width: baseRect.width * viewport.zoom, height: baseRect.height * viewport.zoom),

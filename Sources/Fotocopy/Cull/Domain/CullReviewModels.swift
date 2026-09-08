@@ -26,12 +26,28 @@ struct CullInspectionPoint: Sendable, Hashable {
 /// held by the burst review, rather than an individual frame preview, so
 /// switching frames compares the same detail at the same scale.
 struct CullPreviewViewport: Hashable {
+    static let minimumZoom: CGFloat = 1
+    static let maximumZoom: CGFloat = 6
+
+    /// A tiny tolerance prevents an imperceptible gesture value from making a
+    /// double-click reset instead of opening the full inspection view.
+    static let zoomedInThreshold: CGFloat = 1.02
+
     var zoom: CGFloat
     var center: CullInspectionPoint
 
-    init(zoom: CGFloat = 1, center: CullInspectionPoint = CullInspectionPoint(x: 0.5, y: 0.5)) {
-        self.zoom = min(max(zoom, 1), 6)
+    init(
+        zoom: CGFloat = minimumZoom,
+        center: CullInspectionPoint = CullInspectionPoint(x: 0.5, y: 0.5)
+    ) {
+        self.zoom = min(max(zoom, Self.minimumZoom), Self.maximumZoom)
         self.center = center
+    }
+
+    /// Double-clicking alternates between the fitted photo and the maximum
+    /// available magnification. A partially zoomed image returns to fit.
+    static func zoomAfterDoubleClick(from zoom: CGFloat) -> CGFloat {
+        zoom > zoomedInThreshold ? minimumZoom : maximumZoom
     }
 }
 
