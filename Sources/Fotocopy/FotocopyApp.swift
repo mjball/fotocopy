@@ -312,6 +312,12 @@ private struct CullCommands: Commands {
             .keyboardShortcut(.downArrow, modifiers: [])
             .disabled(!canReviewGroup)
 
+            Button("Zoom Main Photo") {
+                model.toggleMainPhotoZoom()
+            }
+            .keyboardShortcut("z", modifiers: [])
+            .disabled(!canReviewFrame)
+
             Divider()
 
             Button(model.selectionActionTitle("Keep")) {

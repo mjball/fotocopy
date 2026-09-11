@@ -30,7 +30,8 @@ struct CullWorkspaceView: View {
                     rejectBurst: {
                         guard let burst = model.selectedBurst else { return }
                         model.markAllRejecting(in: burst)
-                    }
+                    },
+                    toggleFullZoom: model.toggleMainPhotoZoom
                 )
                 .frame(width: 0, height: 0)
             }
@@ -477,6 +478,11 @@ private struct SingleFrameReviewView: View {
             }
         }
         .onChange(of: frame.url) { viewport = CullPreviewViewport() }
+        .onChange(of: model.mainPhotoZoomToggle) {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                viewport.toggleFullZoom(centeringOn: model.inspectionPoint(for: frame))
+            }
+        }
         .task(id: frame.url) {
             model.loadCameraAFTarget(for: frame)
             await Task.detached(priority: .utility) {
@@ -894,6 +900,11 @@ private struct BurstReviewView: View {
         }
         .onChange(of: burst.id) {
             viewport = CullPreviewViewport()
+        }
+        .onChange(of: model.mainPhotoZoomToggle) {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                viewport.toggleFullZoom(centeringOn: selectedFrame.flatMap(model.inspectionPoint))
+            }
         }
         .task(id: burst.id) {
             model.loadCameraAFTargets(in: burst)
@@ -2092,6 +2103,7 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
     let keepCurrentAndRejectRest: () -> Void
     let rejectCurrentFrame: () -> Void
     let rejectBurst: () -> Void
+    let toggleFullZoom: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -2100,7 +2112,8 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
             keepCurrentFrame: keepCurrentFrame,
             keepCurrentAndRejectRest: keepCurrentAndRejectRest,
             rejectCurrentFrame: rejectCurrentFrame,
-            rejectBurst: rejectBurst
+            rejectBurst: rejectBurst,
+            toggleFullZoom: toggleFullZoom
         )
     }
 
@@ -2116,6 +2129,7 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
         context.coordinator.keepCurrentAndRejectRest = keepCurrentAndRejectRest
         context.coordinator.rejectCurrentFrame = rejectCurrentFrame
         context.coordinator.rejectBurst = rejectBurst
+        context.coordinator.toggleFullZoom = toggleFullZoom
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -2129,6 +2143,7 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
         var keepCurrentAndRejectRest: () -> Void
         var rejectCurrentFrame: () -> Void
         var rejectBurst: () -> Void
+        var toggleFullZoom: () -> Void
         private var monitor: Any?
 
         init(
@@ -2137,7 +2152,8 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
             keepCurrentFrame: @escaping () -> Void,
             keepCurrentAndRejectRest: @escaping () -> Void,
             rejectCurrentFrame: @escaping () -> Void,
-            rejectBurst: @escaping () -> Void
+            rejectBurst: @escaping () -> Void,
+            toggleFullZoom: @escaping () -> Void
         ) {
             self.moveFrame = moveFrame
             self.moveBurst = moveBurst
@@ -2145,6 +2161,7 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
             self.keepCurrentAndRejectRest = keepCurrentAndRejectRest
             self.rejectCurrentFrame = rejectCurrentFrame
             self.rejectBurst = rejectBurst
+            self.toggleFullZoom = toggleFullZoom
         }
 
         func install() {
@@ -2163,7 +2180,7 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
                     return event
                 }
 
-                if event.isARepeat, action.isDecision {
+                if event.isARepeat, action.suppressesKeyRepeat {
                     return nil
                 }
 
@@ -2191,6 +2208,9 @@ private struct CullNavigationKeyHandler: NSViewRepresentable {
                     return nil
                 case .rejectBurst:
                     self.rejectBurst()
+                    return nil
+                case .toggleFullZoom:
+                    self.toggleFullZoom()
                     return nil
                 case .moveFrame, .moveBurst:
                     return event
@@ -2291,6 +2311,9 @@ final class CullViewModel {
     var isMoving = false
     var movingFrameCount = 0
     var lastMoveSummary: String?
+    /// A monotonic request lets the current review own its local viewport
+    /// while menu and plain-key shortcuts share one action.
+    private(set) var mainPhotoZoomToggle = 0
     var cullRefreshNotice: String?
     private(set) var cullRefreshProgressMessage: String?
     var quickExportSelection = CullQuickExportSelection()
@@ -2783,6 +2806,9 @@ final class CullViewModel {
         selectedQuickExportURLs.contains(url)
     }
 
+    func toggleMainPhotoZoom() {
+        mainPhotoZoomToggle &+= 1
+    }
     func quickExportSelectedPhotos(to destinationFolderURL: URL) {
         let sources = selectedQuickExportURLs
         guard !sources.isEmpty, !isQuickExporting else { return }
