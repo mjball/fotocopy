@@ -49,11 +49,6 @@ struct CullWorkspaceView: View {
         } message: {
             Text(model.moveErrorMessage ?? "Unknown error")
         }
-        .alert(model.quickExportAlertTitle, isPresented: $model.showQuickExportAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(model.quickExportAlertMessage)
-        }
     }
 
     @ViewBuilder
@@ -918,6 +913,20 @@ private struct BurstReviewView: View {
                 Text("Frames")
                     .font(.headline)
                 Spacer()
+                if let selectedFrame {
+                    Button(model.isKeeping(selectedFrame.url) ? "Kept" : "Keep") {
+                        model.isKeeping(selectedFrame.url) ? model.clearSelectedFrameDisposition() : model.keepSelectedFrame()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button(model.isRejecting(selectedFrame.url) ? "Rejected" : "Reject") {
+                        model.isRejecting(selectedFrame.url) ? model.clearSelectedFrameDisposition() : model.rejectSelectedFrame()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Divider()
+                        .frame(height: 20)
+                }
                 if burst.frames.count > 1, selectedFrame != nil {
                     Button("Keep selected, reject \(burst.frames.count - 1)") {
                         model.keepSelectedAndRejectRest(in: burst)
@@ -927,6 +936,13 @@ private struct BurstReviewView: View {
                 Button("Keep all") { model.markAllKeeping(in: burst) }
                 Button("Reject all") { model.markAllRejecting(in: burst) }
                 Button("Clear marks") { model.clearDispositions(in: burst) }
+                if model.canUndoLastMove {
+                    Button { model.undoLastMove() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .help("Undo latest cull move")
+                    .accessibilityLabel("Undo latest cull move")
+                }
             }
             .disabled(model.isMoving)
 
@@ -1080,9 +1096,6 @@ private struct BurstReviewView: View {
             inspectorHeader(for: frame)
 
             Divider()
-            decisionControls(for: frame)
-
-            Divider()
             focusSection(for: frame)
 
             Spacer(minLength: 8)
@@ -1111,30 +1124,6 @@ private struct BurstReviewView: View {
             .controlSize(.small)
             .help("Reveal selected photo in Finder")
         }
-    }
-
-    private func decisionControls(for frame: CullPhoto) -> some View {
-        HStack(spacing: 7) {
-            Button(model.isKeeping(frame.url) ? "Kept" : "Keep") {
-                model.toggleKeeping(frame.url)
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button(model.isRejecting(frame.url) ? "Rejected" : "Reject") {
-                model.toggleRejecting(frame.url)
-            }
-            .buttonStyle(.bordered)
-
-            if model.canUndoLastMove {
-                Button { model.undoLastMove() } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
-                .buttonStyle(.bordered)
-                .help("Undo latest cull move")
-                .accessibilityLabel("Undo latest cull move")
-            }
-        }
-        .disabled(model.isMoving)
     }
 
     private func focusSection(for frame: CullPhoto) -> some View {
@@ -1309,33 +1298,20 @@ private struct BurstReviewView: View {
                 .disabled(model.isMoving)
             }
 
-            Menu("More") {
-                if burst.frames.count > 1, selectedFrame != nil {
-                    Button("Keep selected, reject \(burst.frames.count - 1)") {
-                        model.keepSelectedAndRejectRest(in: burst)
-                    }
-                }
-                Button("Keep all") { model.markAllKeeping(in: burst) }
-                Button("Reject all") { model.markAllRejecting(in: burst) }
-                Button("Clear marks") { model.clearDispositions(in: burst) }
+            if burst.frames.count > 1, selectedFrame != nil {
                 Divider()
-                Button("Reveal Selected") { model.revealSelectedFrame() }
-                Button(model.isPickingInspectionPoint ? "Cancel picking" : "Pick detail…") {
-                    if model.isPickingInspectionPoint {
-                        model.cancelPickingInspectionPoint()
-                    } else {
-                        model.beginPickingInspectionPoint()
-                    }
+                    .frame(height: 18)
+                Button("Keep selected, reject \(burst.frames.count - 1)") {
+                    model.keepSelectedAndRejectRest(in: burst)
                 }
-                if model.inspectionSource != nil {
-                    Button("Clear inspection target") {
-                        model.clearInspectionPoint()
-                    }
-                }
+                .buttonStyle(.borderedProminent)
             }
-            .disabled(model.isMoving)
+            Button("Keep all") { model.markAllKeeping(in: burst) }
+            Button("Reject all") { model.markAllRejecting(in: burst) }
+            Button("Clear marks") { model.clearDispositions(in: burst) }
         }
         .controlSize(.small)
+        .disabled(model.isMoving)
     }
 
     private var compactFilmstrip: some View {
@@ -2271,9 +2247,6 @@ final class CullViewModel {
     private(set) var cullRefreshProgressMessage: String?
     var quickExportSelection = CullQuickExportSelection()
     var isQuickExporting = false
-    var quickExportAlertTitle = "Quick Export"
-    var quickExportAlertMessage = ""
-    var showQuickExportAlert = false
     private(set) var previousCullFolderURL: URL?
     private(set) var nextCullFolderURL: URL?
     var selectedFrameURL: URL?
@@ -2296,8 +2269,10 @@ final class CullViewModel {
     private var folderNavigationTask: Task<Void, Never>?
     private var cullRefreshNoticeTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
+    private let quickExportNotifier: any QuickExportNotifying
 
-    init() {
+    init(quickExportNotifier: any QuickExportNotifying = SystemQuickExportNotifier()) {
+        self.quickExportNotifier = quickExportNotifier
         library.onRejectedPhotosTrashed = { [weak self] result in
             self?.refreshAfterTrashingRejects(result)
         }
@@ -2755,33 +2730,14 @@ final class CullViewModel {
                     QuickExportEngine.export(plan)
                 }.value
                 guard !Task.isCancelled else { return }
-                presentQuickExportResult(result, destinationFolderURL: destinationFolderURL)
+                await quickExportNotifier.deliver(
+                    .completed(result: result, destinationFolderURL: destinationFolderURL)
+                )
             } catch {
                 guard !Task.isCancelled else { return }
-                quickExportAlertTitle = "Could not export JPEGs"
-                quickExportAlertMessage = error.localizedDescription
-                showQuickExportAlert = true
+                await quickExportNotifier.deliver(.failed(error))
             }
         }
-    }
-
-    private func presentQuickExportResult(
-        _ result: QuickExportResult,
-        destinationFolderURL: URL
-    ) {
-        let exportedCount = result.exportedURLs.count
-        if result.failures.isEmpty {
-            quickExportAlertTitle = "Quick Export Complete"
-            quickExportAlertMessage = "Exported \(exportedCount) JPEG \(exportedCount == 1 ? "image" : "images") to \(destinationFolderURL.path)."
-        } else {
-            quickExportAlertTitle = exportedCount == 0 ? "Could not export JPEGs" : "Quick Export Partially Complete"
-            let failedNames = result.failures.map { $0.sourceURL.lastPathComponent }.joined(separator: ", ")
-            let successSummary = exportedCount == 0
-                ? ""
-                : "Exported \(exportedCount) JPEG \(exportedCount == 1 ? "image" : "images"). "
-            quickExportAlertMessage = "\(successSummary)Could not export \(failedNames). \(result.failures.first?.message ?? "")"
-        }
-        showQuickExportAlert = true
     }
 
     func selectFirstSingleFrameMatchingFilter() {
