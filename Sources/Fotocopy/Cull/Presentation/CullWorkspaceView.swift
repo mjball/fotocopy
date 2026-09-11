@@ -453,6 +453,10 @@ private struct SingleFrameReviewView: View {
 
     private var visibleFrames: [CullPhoto] { model.filteredSingleFrames }
 
+    private var selectedFrames: [CullPhoto] {
+        model.selectedFrames(in: visibleFrames)
+    }
+
     private var framePosition: Int {
         (visibleFrames.firstIndex { $0.url == frame.url } ?? 0) + 1
     }
@@ -570,17 +574,24 @@ private struct SingleFrameReviewView: View {
         SingleFrameFilterPicker(model: model)
     }
 
+    @ViewBuilder
     private var preview: some View {
-        CullInspectionPreviewView(
-            url: frame.url,
-            inspectionPoint: model.inspectionPoint,
-            cameraAFTarget: showsCameraAFTarget ? model.cameraAFTarget(for: frame.url) : nil,
-            isPickingInspectionPoint: model.isPickingInspectionPoint,
-            onInspectionPointSelected: model.setInspectionPoint,
-            viewport: $viewport
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black, in: RoundedRectangle(cornerRadius: 10))
+        if selectedFrames.count > 1 {
+            CullSelectedFramesGrid(frames: selectedFrames) { url in
+                model.selectSingleFrame(url)
+            }
+        } else {
+            CullInspectionPreviewView(
+                url: frame.url,
+                inspectionPoint: model.inspectionPoint,
+                cameraAFTarget: showsCameraAFTarget ? model.cameraAFTarget(for: frame.url) : nil,
+                isPickingInspectionPoint: model.isPickingInspectionPoint,
+                onInspectionPointSelected: model.setInspectionPoint,
+                viewport: $viewport
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.black, in: RoundedRectangle(cornerRadius: 10))
+        }
     }
 
     private func inspector(height: CGFloat) -> some View {
@@ -767,9 +778,8 @@ private struct SingleFrameReviewView: View {
                                 }
                             }
                             .overlay {
-                                CullFrameSelectionBorders(
-                                    isSelectedForExport: model.isQuickExportSelected(candidate.url),
-                                    isFocused: model.isFocusedFrame(candidate.url),
+                                CullFrameSelectionBorder(
+                                    isSelected: model.isQuickExportSelected(candidate.url),
                                     cornerRadius: 6
                                 )
                             }
@@ -857,6 +867,10 @@ private struct BurstReviewView: View {
 
     private var selectedFrame: CullPhoto? {
         burst.frames.first { $0.url == model.selectedFrameURL } ?? burst.frames.first
+    }
+
+    private var selectedFrames: [CullPhoto] {
+        model.selectedFrames(in: burst.frames)
     }
 
     private var selectedFramePosition: Int {
@@ -963,9 +977,8 @@ private struct BurstReviewView: View {
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                                     .overlay {
-                                        CullFrameSelectionBorders(
-                                            isSelectedForExport: model.isQuickExportSelected(frame.url),
-                                            isFocused: model.isFocusedFrame(frame.url),
+                                        CullFrameSelectionBorder(
+                                            isSelected: model.isQuickExportSelected(frame.url),
                                             cornerRadius: 6
                                         )
                                     }
@@ -1066,7 +1079,13 @@ private struct BurstReviewView: View {
 
     @ViewBuilder
     private func mainPreview(for frame: CullPhoto, height: CGFloat? = nil) -> some View {
-        if let height {
+        if selectedFrames.count > 1 {
+            CullSelectedFramesGrid(frames: selectedFrames) { url in
+                model.selectFrame(url)
+            }
+            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        } else if let height {
             CullInspectionPreviewView(
                 url: frame.url,
                 inspectionPoint: model.inspectionPoint,
@@ -1342,9 +1361,8 @@ private struct BurstReviewView: View {
                             }
                         }
                         .overlay {
-                            CullFrameSelectionBorders(
-                                isSelectedForExport: model.isQuickExportSelected(frame.url),
-                                isFocused: model.isFocusedFrame(frame.url),
+                            CullFrameSelectionBorder(
+                                isSelected: model.isQuickExportSelected(frame.url),
                                 cornerRadius: 6
                             )
                         }
@@ -2024,9 +2042,8 @@ private struct CullInspectionCropSection: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {
-            CullFrameSelectionBorders(
-                isSelectedForExport: model.isQuickExportSelected(frame.url),
-                isFocused: model.isFocusedFrame(frame.url),
+            CullFrameSelectionBorder(
+                isSelected: model.isQuickExportSelected(frame.url),
                 cornerRadius: 7
             )
         }
@@ -2203,21 +2220,52 @@ private struct CullFrameDispositionState: Sendable {
     let disposition: CullDisposition?
 }
 
-/// Blue outlines identify all frames selected for Quick Export. The inset
-/// neutral outline separately identifies the one frame shown in the preview.
-private struct CullFrameSelectionBorders: View {
-    let isSelectedForExport: Bool
-    let isFocused: Bool
+enum CullPreviewSelection: Equatable {
+    case none
+    case single(URL)
+    case grid([URL])
+}
+
+/// Blue identifies the complete active selection. A single selection uses the
+/// normal preview; multiple selections use the preview grid.
+private struct CullFrameSelectionBorder: View {
+    let isSelected: Bool
     let cornerRadius: CGFloat
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(isSelectedForExport ? Color.accentColor : Color.clear, lineWidth: 3)
-            RoundedRectangle(cornerRadius: max(cornerRadius - 3, 0))
-                .stroke(isFocused ? Color.primary.opacity(0.75) : Color.clear, lineWidth: 1)
-                .padding(4)
+        RoundedRectangle(cornerRadius: cornerRadius)
+            .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
+    }
+}
+
+/// Multiple selected frames replace the single-image canvas until the
+/// photographer clicks one image to resume individual inspection and rating.
+private struct CullSelectedFramesGrid: View {
+    let frames: [CullPhoto]
+    let onSelect: (URL) -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 180, maximum: 360), spacing: 12)]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(frames) { frame in
+                    Button {
+                        onSelect(frame.url)
+                    } label: {
+                        CullPreviewView(url: frame.url, size: .large)
+                            .frame(maxWidth: .infinity)
+                            .aspectRatio(4 / 3, contentMode: .fit)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show \(frame.filename)")
+                }
+            }
+            .padding(12)
         }
+        .accessibilityLabel("\(frames.count) selected images")
     }
 }
 
@@ -2331,6 +2379,23 @@ final class CullViewModel {
     var selectedQuickExportURLs: [URL] {
         let frames = (scanResult?.bursts.flatMap(\.frames) ?? []) + (scanResult?.singleFrames ?? [])
         return quickExportSelection.selectedURLs(from: frames, fallback: selectedFrameURL)
+    }
+
+    func selectedFrames(in frames: [CullPhoto]) -> [CullPhoto] {
+        let selectedURLs = Set(selectedQuickExportURLs)
+        return frames.filter { selectedURLs.contains($0.url) }
+    }
+
+    func previewSelection(in frames: [CullPhoto]) -> CullPreviewSelection {
+        let selectedURLs = selectedFrames(in: frames).map(\.url)
+        switch selectedURLs.count {
+        case 0:
+            return .none
+        case 1:
+            return .single(selectedURLs[0])
+        default:
+            return .grid(selectedURLs)
+        }
     }
 
     var canQuickExport: Bool {
@@ -2708,10 +2773,6 @@ final class CullViewModel {
         selectedQuickExportURLs.contains(url)
     }
 
-    func isFocusedFrame(_ url: URL) -> Bool {
-        selectedFrameURL == url
-    }
-
     func quickExportSelectedPhotos(to destinationFolderURL: URL) {
         let sources = selectedQuickExportURLs
         guard !sources.isEmpty, !isQuickExporting else { return }
@@ -3049,7 +3110,7 @@ final class CullViewModel {
         }
         guard !changedStates.isEmpty else {
             if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
-                selectedFrameURL = nextFrameURL
+                selectFrameAfterDecision(nextFrameURL)
             }
             if let singleFrameURL {
                 advanceToNextSingleFrame(after: singleFrameURL, replacements: [:])
@@ -3072,7 +3133,7 @@ final class CullViewModel {
         let relocationCount = relocations.filter { $0.sourceURL != $0.destinationURL }.count
         guard relocationCount > 0 else {
             if let frameURL, let nextFrameURL = nextFrameURL(after: frameURL) {
-                selectedFrameURL = nextFrameURL
+                selectFrameAfterDecision(nextFrameURL)
             }
             if let singleFrameURL {
                 advanceToNextSingleFrame(after: singleFrameURL, replacements: [:])
@@ -3106,7 +3167,7 @@ final class CullViewModel {
                     let destinationBySource = Dictionary(
                         uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
                     )
-                    self.selectedFrameURL = destinationBySource[nextFrameURL] ?? nextFrameURL
+                    self.selectFrameAfterDecision(destinationBySource[nextFrameURL] ?? nextFrameURL)
                 }
                 if let singleFrameURL {
                     let destinationBySource = Dictionary(
@@ -3154,6 +3215,13 @@ final class CullViewModel {
         }
     }
 
+    /// A rating completes a one-image review action, so its automatic advance
+    /// replaces any temporary multi-selection with the next active image.
+    private func selectFrameAfterDecision(_ url: URL?) {
+        selectedFrameURL = url
+        quickExportSelection.reset(to: url)
+    }
+
     private func nextFrameURL(after frameURL: URL) -> URL? {
         guard let burst = selectedBurst,
               burst.frames.contains(where: { $0.url == frameURL }) else {
@@ -3179,7 +3247,7 @@ final class CullViewModel {
         let currentURL = replacements[sourceURL] ?? sourceURL
         let currentIndex = allFrames.firstIndex { $0.url == currentURL } ?? -1
         guard currentIndex >= 0 else {
-            selectedFrameURL = filteredSingleFrames.first?.url
+            selectFrameAfterDecision(filteredSingleFrames.first?.url)
             return
         }
 
@@ -3194,7 +3262,7 @@ final class CullViewModel {
         }
 
         if let nextFrameURL {
-            selectedFrameURL = nextFrameURL
+            selectFrameAfterDecision(nextFrameURL)
             inspectionSource = nil
             isPickingInspectionPoint = false
             automaticallyUseCameraAFTargetForSelectedFrame()
@@ -3204,7 +3272,7 @@ final class CullViewModel {
         // All remains visible even after every photo is decided, so retain the
         // final selection for a last confirmation rather than showing an empty
         // queue. Narrow filters retain their existing empty-state behavior.
-        selectedFrameURL = singleFrameFilter == .all ? currentURL : nil
+        selectFrameAfterDecision(singleFrameFilter == .all ? currentURL : nil)
         inspectionSource = nil
         isPickingInspectionPoint = false
     }
