@@ -8,6 +8,14 @@ struct CullWorkspaceView: View {
 
     var body: some View {
         detail
+        .overlay(alignment: .top) {
+            if let message = model.cullRefreshNotice {
+                CullRefreshNotice(message: message) {
+                    model.dismissCullRefreshNotice()
+                }
+                .padding(.top, 14)
+            }
+        }
         .background {
             if model.selectedReviewGroup != nil {
                 CullNavigationKeyHandler(
@@ -52,9 +60,9 @@ struct CullWorkspaceView: View {
     private var detail: some View {
         if model.isScanning {
             ContentUnavailableView(
-                "Finding photos",
+                model.cullRefreshProgressMessage == nil ? "Finding photos" : "Updating this cull",
                 systemImage: "rectangle.stack.badge.play",
-                description: Text("Fotocopy reads this date folder plus Keeps and Rejects, then rebuilds burst and single-frame review from the files on disk."))
+                description: Text(model.cullRefreshProgressMessage ?? "Fotocopy reads this date folder plus Keeps and Rejects, then rebuilds burst and single-frame review from the files on disk."))
         } else if let burst = model.selectedBurst {
             BurstReviewView(burst: burst, model: model, layout: layout)
         } else if model.isReviewingSingles, let frame = model.selectedSingleFrame {
@@ -84,6 +92,33 @@ struct CullWorkspaceView: View {
         }
     }
 
+}
+
+/// This unobtrusive notice confirms a filesystem change after the refresh
+/// finishes. It does not block review or ask the photographer to acknowledge
+/// an action they already confirmed in Organize.
+private struct CullRefreshNotice: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.clockwise.circle.fill")
+                .foregroundStyle(.green)
+            Text(message)
+                .font(.subheadline)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss Cull refresh notice")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(radius: 8, y: 3)
+        .accessibilityElement(children: .combine)
+    }
 }
 
 /// The single-frame filter remains visible after a focused queue is exhausted,
@@ -2232,6 +2267,8 @@ final class CullViewModel {
     var isMoving = false
     var movingFrameCount = 0
     var lastMoveSummary: String?
+    var cullRefreshNotice: String?
+    private(set) var cullRefreshProgressMessage: String?
     var quickExportSelection = CullQuickExportSelection()
     var isQuickExporting = false
     var quickExportAlertTitle = "Quick Export"
@@ -2253,12 +2290,17 @@ final class CullViewModel {
 
     private var scanTask: Task<Void, Never>?
     private var preferredReviewGroupIDAfterScan: CullReviewGroupID?
+    private var preferredFrameURLAfterScan: URL?
     private var selectsLastReviewGroupAfterScan = false
     private var selectsLastFrameAfterScan = false
     private var folderNavigationTask: Task<Void, Never>?
+    private var cullRefreshNoticeTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
 
     init() {
+        library.onRejectedPhotosTrashed = { [weak self] result in
+            self?.refreshAfterTrashingRejects(result)
+        }
         if let path = UserDefaults.standard.string(forKey: PreferenceKeys.lastCullFolder) {
             folderURL = URL(fileURLWithPath: path)
         }
@@ -2448,12 +2490,17 @@ final class CullViewModel {
     private func startScan(
         preferring preferredReviewGroupID: CullReviewGroupID? = nil,
         selectingLastReviewGroup: Bool = false,
-        selectingLastFrame: Bool = false
+        selectingLastFrame: Bool = false,
+        preferringFrameURL: URL? = nil,
+        refreshProgressMessage: String? = nil,
+        refreshCompletionNotice: String? = nil
     ) {
         guard let folderURL, !isScanning, !isMoving else { return }
         preferredReviewGroupIDAfterScan = preferredReviewGroupID
+        preferredFrameURLAfterScan = preferringFrameURL
         selectsLastReviewGroupAfterScan = selectingLastReviewGroup
         selectsLastFrameAfterScan = selectingLastFrame
+        cullRefreshProgressMessage = refreshProgressMessage
         refreshCullFolderNavigation(for: folderURL)
         scanTask?.cancel()
         scanResult = nil
@@ -2494,17 +2541,34 @@ final class CullViewModel {
                 guard !Task.isCancelled else { return }
                 scanResult = result
                 dispositions = Self.onDiskDispositions(in: result)
-                let groupID = CullReviewGroupNavigation.initialGroupID(
+                let preferredFrameGroupID = preferredFrameURLAfterScan.flatMap { preferredFrameURL in
+                    result.reviewGroups.first { group in
+                        visibleFrames(in: group).contains { $0.url == preferredFrameURL }
+                    }?.id
+                }
+                let groupID = preferredFrameGroupID ?? CullReviewGroupNavigation.initialGroupID(
                     in: result.reviewGroups,
                     preferring: preferredReviewGroupIDAfterScan,
                     selectingLastReviewGroup: selectsLastReviewGroupAfterScan
                 )
-                if let groupID {
+                if let groupID,
+                   let group = result.reviewGroups.first(where: { $0.id == groupID }) {
                     selectReviewGroup(withID: groupID, selectingLastFrame: selectsLastFrameAfterScan)
+                    if let preferredFrameURLAfterScan,
+                       visibleFrames(in: group).contains(where: { $0.url == preferredFrameURLAfterScan }) {
+                        selectedFrameURL = preferredFrameURLAfterScan
+                        quickExportSelection.reset(to: selectedFrameURL)
+                        automaticallyUseCameraAFTargetForSelectedFrame()
+                    }
                 }
                 preferredReviewGroupIDAfterScan = nil
+                preferredFrameURLAfterScan = nil
                 selectsLastReviewGroupAfterScan = false
                 selectsLastFrameAfterScan = false
+                cullRefreshProgressMessage = nil
+                if let refreshCompletionNotice {
+                    showCullRefreshNotice(refreshCompletionNotice)
+                }
             } catch is CancellationError {
                 // A new scan replaced this one.
             } catch {
@@ -2512,7 +2576,44 @@ final class CullViewModel {
                 showError = true
             }
             isScanning = false
+            cullRefreshProgressMessage = nil
             scanTask = nil
+        }
+    }
+
+    /// Cull includes direct Rejects files to preserve a burst's context. Once
+    /// Organize sends those files to Finder's Trash, rebuild the active day
+    /// from disk instead of continuing to render stale preview URLs.
+    func refreshAfterTrashingRejects(_ result: CullLibraryTrashResult) {
+        guard let folderURL, !result.trashedPrimaryPhotoURLs.isEmpty else { return }
+        let affectedURLs = CullTrashRefreshPolicy.trashedFrameURLs(
+            in: folderURL,
+            from: result.trashedPrimaryPhotoURLs
+        )
+        guard !affectedURLs.isEmpty else { return }
+
+        let count = affectedURLs.count
+        let photoLabel = count == 1 ? "rejected photo" : "rejected photos"
+        startScan(
+            preferring: selectedReviewGroupID,
+            preferringFrameURL: selectedFrameURL,
+            refreshProgressMessage: "\(count) \(photoLabel) moved to Finder’s Trash. Rebuilding this review from the files on disk.",
+            refreshCompletionNotice: "\(count) \(photoLabel) moved to Finder’s Trash. Cull refreshed."
+        )
+    }
+
+    func dismissCullRefreshNotice() {
+        cullRefreshNoticeTask?.cancel()
+        cullRefreshNotice = nil
+    }
+
+    private func showCullRefreshNotice(_ message: String) {
+        cullRefreshNoticeTask?.cancel()
+        cullRefreshNotice = message
+        cullRefreshNoticeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.cullRefreshNotice = nil
         }
     }
 
