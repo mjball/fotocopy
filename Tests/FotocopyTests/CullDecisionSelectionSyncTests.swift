@@ -5,7 +5,7 @@ import Testing
 @Suite
 @MainActor
 struct CullDecisionSelectionSyncTests {
-    @Test func keepingASingleFrameAdvancesTheBlueFrameHighlight() async throws {
+    @Test func keepingASingleFrameAdvancesTheFocusedFrameIndicator() async throws {
         let fixture = try makeSingleFrameModel()
         defer { try? FileManager.default.removeItem(at: fixture.folderURL) }
 
@@ -16,7 +16,7 @@ struct CullDecisionSelectionSyncTests {
         #expect(!fixture.model.isFocusedFrame(fixture.firstURL))
     }
 
-    @Test func rejectingASingleFrameAdvancesTheBlueFrameHighlight() async throws {
+    @Test func rejectingASingleFrameAdvancesTheFocusedFrameIndicator() async throws {
         let fixture = try makeSingleFrameModel()
         defer { try? FileManager.default.removeItem(at: fixture.folderURL) }
 
@@ -25,6 +25,19 @@ struct CullDecisionSelectionSyncTests {
         try await waitForDecisionAdvance(in: fixture.model, expectedFrameURL: fixture.secondURL)
         #expect(fixture.model.isFocusedFrame(fixture.secondURL))
         #expect(!fixture.model.isFocusedFrame(fixture.firstURL))
+    }
+
+    @Test func commandClickKeepsEveryExportSelectionVisibleWhileFocusMoves() throws {
+        let fixture = try makeSingleFrameModel()
+        defer { try? FileManager.default.removeItem(at: fixture.folderURL) }
+
+        fixture.model.selectSingleFrame(fixture.firstURL)
+        fixture.model.selectSingleFrame(fixture.secondURL, extendingQuickExportSelection: true)
+
+        #expect(fixture.model.isQuickExportSelected(fixture.firstURL))
+        #expect(fixture.model.isQuickExportSelected(fixture.secondURL))
+        #expect(!fixture.model.isFocusedFrame(fixture.firstURL))
+        #expect(fixture.model.isFocusedFrame(fixture.secondURL))
     }
 
     private func makeSingleFrameModel() throws -> (model: CullViewModel, folderURL: URL, firstURL: URL, secondURL: URL) {
