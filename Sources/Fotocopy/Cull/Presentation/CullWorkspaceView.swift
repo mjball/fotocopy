@@ -737,8 +737,8 @@ private struct SingleFrameReviewView: View {
                                 }
                             }
                             .overlay {
-                                CullQuickExportSelectionBorder(
-                                    isSelectedForExport: model.isQuickExportSelected(candidate.url),
+                                CullFrameSelectionBorder(
+                                    isHighlighted: model.isFocusedFrame(candidate.url),
                                     cornerRadius: 6
                                 )
                             }
@@ -911,8 +911,8 @@ private struct BurstReviewView: View {
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                                     .overlay {
-                                        CullQuickExportSelectionBorder(
-                                            isSelectedForExport: model.isQuickExportSelected(frame.url),
+                                        CullFrameSelectionBorder(
+                                            isHighlighted: model.isFocusedFrame(frame.url),
                                             cornerRadius: 6
                                         )
                                     }
@@ -1329,8 +1329,8 @@ private struct BurstReviewView: View {
                             }
                         }
                         .overlay {
-                            CullQuickExportSelectionBorder(
-                                isSelectedForExport: model.isQuickExportSelected(frame.url),
+                            CullFrameSelectionBorder(
+                                isHighlighted: model.isFocusedFrame(frame.url),
                                 cornerRadius: 6
                             )
                         }
@@ -2010,8 +2010,8 @@ private struct CullInspectionCropSection: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {
-            CullQuickExportSelectionBorder(
-                isSelectedForExport: model.isQuickExportSelected(frame.url),
+            CullFrameSelectionBorder(
+                isHighlighted: model.isFocusedFrame(frame.url),
                 cornerRadius: 7
             )
         }
@@ -2188,14 +2188,15 @@ private struct CullFrameDispositionState: Sendable {
     let disposition: CullDisposition?
 }
 
-/// Blue identifies every frame selected for Quick Export.
-private struct CullQuickExportSelectionBorder: View {
-    let isSelectedForExport: Bool
+/// Blue identifies the frame currently shown in the review preview. Quick
+/// Export has a separate, non-visual multi-selection state.
+private struct CullFrameSelectionBorder: View {
+    let isHighlighted: Bool
     let cornerRadius: CGFloat
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
-            .stroke(isSelectedForExport ? Color.accentColor : Color.clear, lineWidth: 3)
+            .stroke(isHighlighted ? Color.accentColor : Color.clear, lineWidth: 3)
     }
 }
 
@@ -2619,6 +2620,10 @@ final class CullViewModel {
 
     func isQuickExportSelected(_ url: URL) -> Bool {
         selectedQuickExportURLs.contains(url)
+    }
+
+    func isFocusedFrame(_ url: URL) -> Bool {
+        selectedFrameURL == url
     }
 
     func quickExportSelectedPhotos(to destinationFolderURL: URL) {
