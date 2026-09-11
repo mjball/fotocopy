@@ -627,7 +627,11 @@ struct DestinationManifest {
                     kind: .outOfSync,
                     destinationFileCount: snapshots.count,
                     untrackedFileCount: untracked.count,
-                    missingFileCount: missing.count,
+                    // Missing files are converted to tombstones above, which
+                    // deliberately preserves their duplicate history. They
+                    // are not an outstanding manifest mismatch and must not
+                    // be reported alongside a genuine untracked file.
+                    missingFileCount: 0,
                     modifiedFileCount: modified.count,
                     details: nil
                 )
