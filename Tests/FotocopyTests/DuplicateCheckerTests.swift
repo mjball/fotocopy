@@ -416,6 +416,36 @@ struct DuplicateCheckerTests {
         #expect(restoredState.lastSeenAt >= importedState.lastSeenAt)
     }
 
+    @Test func tombstonedFilesAreNotReportedAsMissingWithAnUntrackedFile() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let checker = DuplicateChecker()
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+        try createFile(dir, name: "trashed.jpg", size: 100)
+        try await checker.markImported(
+            filename: "trashed.jpg",
+            size: 100,
+            sourceBucket: DestinationManifest.rootBucket,
+            destinationRelativePath: "trashed.jpg",
+            destinationSize: 100
+        )
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("trashed.jpg"))
+        #expect(try await checker.buildIndex(at: dir) == .ready)
+
+        try createFile(dir, name: "untracked.jpg", size: 100)
+        #expect(try await checker.buildIndex(at: dir) == .requiresUserAction(
+            ManifestAttention(
+                kind: .outOfSync,
+                destinationFileCount: 1,
+                untrackedFileCount: 1,
+                missingFileCount: 0,
+                modifiedFileCount: 0,
+                details: nil
+            )
+        ))
+    }
+
     @Test func rebuildPreservesDeletedDestinationFileHistory() async throws {
         let dir = try makeTempDir()
         defer { cleanup(dir) }
@@ -605,7 +635,7 @@ struct DuplicateCheckerTests {
                 kind: .outOfSync,
                 destinationFileCount: 1,
                 untrackedFileCount: 1,
-                missingFileCount: 1,
+                missingFileCount: 0,
                 modifiedFileCount: 0,
                 details: nil
             )
