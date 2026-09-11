@@ -24,6 +24,18 @@ struct LibraryDecisionEngineTests {
             .appendingPathComponent(disposition.destinationFolderName)
     }
 
+    private func recordManifestEntry(for fileURL: URL, in root: URL, size: Int) throws {
+        let rootPath = root.standardizedFileURL.path + "/"
+        let relativePath = String(fileURL.standardizedFileURL.path.dropFirst(rootPath.count))
+        try DestinationManifest(destinationURL: root).recordImport(
+            destinationRelativePath: relativePath,
+            sourceFilename: fileURL.lastPathComponent,
+            sourceBucket: DestinationManifest.rootBucket,
+            sourceSize: size,
+            destinationSize: size
+        )
+    }
+
     @Test func scanFindsOnlyDirectDecisionCR3Packages() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -130,6 +142,25 @@ struct LibraryDecisionEngineTests {
         #expect(afterUndo == before)
     }
 
+    @Test func imageStatisticsRetainRejectedCountAfterTrashAndPermanentDeletion() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let raw = decisionFolder(root, disposition: .reject).appendingPathComponent("BL5A0042.CR3")
+        try createFile(raw, size: 300)
+        try recordManifestEntry(for: raw, in: root, size: 300)
+        try DestinationManifest(destinationURL: root).recordDeletedPaths([
+            "2026/08/22/Rejects/BL5A0042.CR3"
+        ])
+        try FileManager.default.removeItem(at: raw)
+
+        let statistics = try LibraryDecisionEngine.scanImageStatistics(libraryRootURL: root)
+
+        #expect(statistics.rejected == LibraryImageStatisticsBucket(imageCount: 1, byteCount: 0))
+        #expect(statistics.totalImageCount == 1)
+        #expect(statistics.totalByteCount == 0)
+    }
+
     @Test func libraryRootUsesFotocopyChildWhenImportDestinationIsAVolume() throws {
         let volumeRoot = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: volumeRoot) }
@@ -155,6 +186,7 @@ struct LibraryDecisionEngineTests {
         let on1 = raw.appendingPathExtension("on1")
         try createFile(raw, size: 200)
         try createFile(on1, size: 20)
+        try recordManifestEntry(for: raw, in: root, size: 200)
         let plan = try LibraryDecisionEngine.makeTrashPlan(libraryRootURL: root)
 
         var trashed: [URL] = []
@@ -192,6 +224,7 @@ struct LibraryDecisionEngineTests {
 
         let raw = decisionFolder(root, disposition: .reject).appendingPathComponent("BL5A0003.CR3")
         try createFile(raw)
+        try recordManifestEntry(for: raw, in: root, size: 100)
         let plan = try LibraryDecisionEngine.makeTrashPlan(libraryRootURL: root)
 
         let result = LibraryDecisionEngine.executeTrash(
@@ -202,5 +235,16 @@ struct LibraryDecisionEngineTests {
 
         #expect(result.trashedPrimaryPhotoURLs.map(\.lastPathComponent) == [raw.lastPathComponent])
         #expect(result.manifestError?.contains("manifest locked") == true)
+    }
+
+    @Test func trashPlanRequiresManifestToRetainRejectedHistory() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try createFile(decisionFolder(root, disposition: .reject).appendingPathComponent("BL5A0043.CR3"))
+
+        #expect(throws: CullLibraryDecisionError.self) {
+            try LibraryDecisionEngine.makeTrashPlan(libraryRootURL: root)
+        }
     }
 }
