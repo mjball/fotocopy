@@ -139,6 +139,31 @@ import Testing
     #expect(!scan.bursts[0].isReviewed)
 }
 
+@Test func trashRefreshOnlyTargetsFilesTrashedFromTheActiveDaysRejectsFolder() {
+    let activeDay = URL(fileURLWithPath: "/library/2026/09/11")
+    let otherDay = URL(fileURLWithPath: "/library/2026/09/10")
+    let activeRejected = activeDay
+        .appendingPathComponent("Rejects")
+        .appendingPathComponent("BL5A0001.CR3")
+    let activeKept = activeDay
+        .appendingPathComponent("Keeps")
+        .appendingPathComponent("BL5A0002.CR3")
+    let otherRejected = otherDay
+        .appendingPathComponent("Rejects")
+        .appendingPathComponent("BL5A0003.CR3")
+    let nestedRejected = activeDay
+        .appendingPathComponent("Rejects")
+        .appendingPathComponent("Elsewhere")
+        .appendingPathComponent("BL5A0004.CR3")
+
+    let affected = CullTrashRefreshPolicy.trashedFrameURLs(
+        in: activeDay,
+        from: [activeRejected, activeKept, otherRejected, nestedRejected]
+    )
+
+    #expect(affected == [activeRejected])
+}
+
 @Test func burstDecisionStatusShowsProgressAndFinishedResult() {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let kept = CullPhoto(

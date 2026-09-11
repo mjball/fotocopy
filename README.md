@@ -34,7 +34,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - The Organize task scans every recognized `YYYY/MM/DD/` folder in the configured import destination—there is no separate catalog to maintain. Its header summarizes total image count and storage, split between unrated, kept, and rejected photos.
 - Browse kept and rejected photos in a date-grouped thumbnail grid; filter by decision, date, or filename; reveal a photo in Finder or reopen its day in Cull.
 - Library totals count supported still-image files only. Videos and XMP/ON1 sidecars are intentionally excluded from both the count and storage total; deleted rejected images retain their count but no longer contribute storage.
-- Recheck and move all rejected photo packages to Finder’s Trash in one confirmed action. Fotocopy preserves their duplicate history without treating intentional Trash cleanup as a manifest mismatch; restore through Finder’s Trash if needed.
+- Recheck and move all rejected photo packages to Finder’s Trash in one confirmed action. Fotocopy preserves their duplicate history without treating intentional Trash cleanup as a manifest mismatch; restore through Finder’s Trash if needed. If the active Cull day is affected, Fotocopy rebuilds that review from disk so removed rejects never leave blank previews or filmstrip slots.
 
 ### Native macOS workflow
 

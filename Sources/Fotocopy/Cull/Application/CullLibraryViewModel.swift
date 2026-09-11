@@ -18,6 +18,10 @@ final class CullLibraryViewModel {
     var pendingTrashPlan: CullLibraryTrashPlan?
     var isTrashingRejects = false
     var trashResult: CullLibraryTrashResult?
+    /// Organize reports only primary RAWs that actually reached Finder's
+    /// Trash. The active Cull controller decides whether its current review
+    /// needs rebuilding.
+    var onRejectedPhotosTrashed: ((CullLibraryTrashResult) -> Void)?
 
     private var scanTask: Task<Void, Never>?
     private var imageStatisticsTask: Task<Void, Never>?
@@ -151,6 +155,7 @@ final class CullLibraryViewModel {
             }.value
             guard !Task.isCancelled else { return }
             model.trashResult = result
+            model.onRejectedPhotosTrashed?(result)
             model.isTrashingRejects = false
             model.scanStatus = "Trash finished"
             do {

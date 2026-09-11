@@ -470,6 +470,24 @@ struct CullFolderScan: Sendable {
     let duration: TimeInterval
 }
 
+/// Identifies which completed Organize Trash operations invalidate the active
+/// Cull review. A cull scans only a date folder and its direct decision
+/// folders, so cleanup in any other date (or nested directory) must not
+/// interrupt the photographer's current review.
+enum CullTrashRefreshPolicy {
+    static func trashedFrameURLs(
+        in folderURL: URL,
+        from trashedURLs: [URL]
+    ) -> [URL] {
+        let normalizedFolderPath = folderURL.standardizedFileURL.path
+        return trashedURLs.filter { rawURL in
+            let parent = rawURL.deletingLastPathComponent().standardizedFileURL
+            return parent.lastPathComponent == CullDisposition.reject.destinationFolderName
+                && parent.deletingLastPathComponent().standardizedFileURL.path == normalizedFolderPath
+        }
+    }
+}
+
 extension CullFolderScan {
     /// Sidebar order is also vertical review order: bursts first, then the
     /// standalone-photo group that is already shown beneath them in the UI.
