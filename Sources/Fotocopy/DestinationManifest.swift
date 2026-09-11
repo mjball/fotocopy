@@ -461,6 +461,25 @@ struct DestinationManifest {
     /// conservative.
     func recordDeletedPaths(_ relativePaths: [String]) throws {
         guard !relativePaths.isEmpty else { return }
+        let db = try validatedManifestDatabase(for: relativePaths)
+        defer { sqlite3_close(db) }
+        try updatePresence(in: db, deletedPaths: relativePaths, restoredPaths: [])
+    }
+
+    /// Verifies that every primary photo about to leave the library already
+    /// has a manifest row. Callers use this before Trash so a successful move
+    /// cannot silently lose its historical culling outcome.
+    func validateDeletedPaths(_ relativePaths: [String]) throws {
+        guard !relativePaths.isEmpty else { return }
+        let db = try validatedManifestDatabase(for: relativePaths)
+        sqlite3_close(db)
+    }
+
+    /// Returns the paths retained as deletion tombstones. The manifest keeps
+    /// these rows so duplicate detection remains conservative after a Finder
+    /// Trash operation; Cull also uses them to preserve the historical
+    /// rejected-photo count after the original files leave the library.
+    func deletedRelativePaths() throws -> [String] {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw NSError(
                 domain: "DestinationManifest",
@@ -472,7 +491,69 @@ struct DestinationManifest {
         let db = try openDatabase(at: databaseURL)
         defer { sqlite3_close(db) }
         try ensureSchema(in: db)
-        try updatePresence(in: db, deletedPaths: relativePaths, restoredPaths: [])
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT destination_rel_path FROM imports WHERE presence = ?",
+            -1,
+            &stmt,
+            nil
+        ) == SQLITE_OK else {
+            throw manifestError(db, fallback: "Failed to read deleted manifest paths")
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, ManifestPresence.deletedExternally.rawValue, -1, SQLITE_TRANSIENT)
+
+        var paths: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(stmt, 0) else { continue }
+            paths.append(String(cString: path))
+        }
+        return paths
+    }
+
+    private func validatedManifestDatabase(for relativePaths: [String]) throws -> OpaquePointer? {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw NSError(
+                domain: "DestinationManifest",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Fotocopy's destination manifest is unavailable"]
+            )
+        }
+
+        let db = try openDatabase(at: databaseURL)
+        do {
+            try ensureSchema(in: db)
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                db,
+                "SELECT 1 FROM imports WHERE destination_rel_path = ?",
+                -1,
+                &stmt,
+                nil
+            ) == SQLITE_OK else {
+                throw manifestError(db, fallback: "Failed to validate deleted manifest paths")
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            for path in relativePaths {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                sqlite3_bind_text(stmt, 1, path, -1, SQLITE_TRANSIENT)
+                guard sqlite3_step(stmt) == SQLITE_ROW else {
+                    throw NSError(
+                        domain: "DestinationManifest",
+                        code: 5,
+                        userInfo: [NSLocalizedDescriptionKey: "Fotocopy's destination manifest does not track \(path)"]
+                    )
+                }
+            }
+            return db
+        } catch {
+            sqlite3_close(db)
+            throw error
+        }
     }
 
     private func loadIndexResult() throws -> ManifestLoadResult {

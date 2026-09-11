@@ -185,6 +185,7 @@ struct CullLibraryTrashResult: Sendable {
 enum CullLibraryDecisionError: LocalizedError {
     case libraryUnavailable(URL)
     case noRejectedPhotos
+    case manifestUnavailableForTrash
     case staleOrUnsafeDecision(URL)
 
     var errorDescription: String? {
@@ -193,6 +194,8 @@ enum CullLibraryDecisionError: LocalizedError {
             return "The Fotocopy library at \(url.path) is unavailable."
         case .noRejectedPhotos:
             return "There are no rejected photos to move to Trash."
+        case .manifestUnavailableForTrash:
+            return "Fotocopy needs its destination manifest before moving rejects to Trash, so their rejected count can be retained. Build or repair the manifest, then try again."
         case .staleOrUnsafeDecision(let url):
             return "\(url.lastPathComponent) is no longer a direct file in this library's Rejects folder. Refresh Library Decisions before trying again."
         }
@@ -282,6 +285,10 @@ enum LibraryDecisionEngine {
             return $0.filename.localizedStandardCompare($1.filename) == .orderedAscending
         }
         let scannedAt = Date()
+        addDeletedRejectedImageTombstones(
+            from: root,
+            to: &imageBuckets
+        )
         return CullLibraryDecisionScan(
             libraryRootURL: root,
             decisions: decisions,
@@ -328,6 +335,11 @@ enum LibraryDecisionEngine {
             }
         }
 
+        addDeletedRejectedImageTombstones(
+            from: root,
+            to: &buckets
+        )
+
         return LibraryImageStatistics(
             libraryRootURL: root,
             unrated: buckets[.unrated] ?? .empty,
@@ -345,6 +357,14 @@ enum LibraryDecisionEngine {
     static func makeTrashPlan(from scan: CullLibraryDecisionScan) throws -> CullLibraryTrashPlan {
         let packages = scan.decisions.filter { $0.disposition == .reject }
         guard !packages.isEmpty else { throw CullLibraryDecisionError.noRejectedPhotos }
+        let manifest = DestinationManifest(destinationURL: scan.libraryRootURL)
+        let paths = packages.compactMap { relativePath(of: $0.rawURL, within: scan.libraryRootURL) }
+        guard paths.count == packages.count else { throw CullLibraryDecisionError.manifestUnavailableForTrash }
+        do {
+            try manifest.validateDeletedPaths(paths)
+        } catch {
+            throw CullLibraryDecisionError.manifestUnavailableForTrash
+        }
         return CullLibraryTrashPlan(libraryRootURL: scan.libraryRootURL, packages: packages, createdAt: Date())
     }
 
@@ -480,6 +500,41 @@ enum LibraryDecisionEngine {
         buckets[state] = LibraryImageStatisticsBucket(
             imageCount: current.imageCount + imageFiles.count,
             byteCount: current.byteCount + imageFiles.reduce(0) { $0 + fileSize($1, fileManager: fileManager) }
+        )
+    }
+
+    /// Rejected originals moved to Finder's Trash are no longer visible to a
+    /// filesystem scan. Their manifest tombstone retains the final direct
+    /// Rejects path, which is sufficient to preserve the culling outcome
+    /// without counting sidecars, videos, or files deleted from other places.
+    private static func addDeletedRejectedImageTombstones(
+        from libraryRootURL: URL,
+        to buckets: inout [LibraryImageReviewState: LibraryImageStatisticsBucket]
+    ) {
+        let manifest = DestinationManifest(destinationURL: libraryRootURL)
+        guard FileManager.default.fileExists(atPath: manifest.databaseURL.path),
+              let paths = try? manifest.deletedRelativePaths() else {
+            return
+        }
+        let count = paths.count(where: isDeletedRejectedStillImagePath)
+        guard count > 0, let rejected = buckets[.rejected] else { return }
+        buckets[.rejected] = LibraryImageStatisticsBucket(
+            imageCount: rejected.imageCount + count,
+            byteCount: rejected.byteCount
+        )
+    }
+
+    private static func isDeletedRejectedStillImagePath(_ relativePath: String) -> Bool {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 5,
+              components[3] == CullDisposition.reject.destinationFolderName,
+              isYear(String(components[0])),
+              isMonth(String(components[1])),
+              isDay(String(components[2]), year: String(components[0]), month: String(components[1])) else {
+            return false
+        }
+        return supportedStillImageExtensions.contains(
+            URL(fileURLWithPath: String(components[4])).pathExtension.lowercased()
         )
     }
 
