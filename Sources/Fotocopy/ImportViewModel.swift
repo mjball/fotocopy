@@ -7,6 +7,16 @@ struct PreviewRequest: Equatable {
     let destinationPath: String
 }
 
+private struct PreparedImportSession {
+    let request: PreviewRequest
+    let preview: PreviewResult
+    let duplicateChecker: DuplicateChecker
+
+    func matches(_ request: PreviewRequest) -> Bool {
+        self.request == request
+    }
+}
+
 enum SourcePathAvailability: Equatable {
     case available
     case volumeNotMounted(name: String)
@@ -52,6 +62,7 @@ final class ImportViewModel {
     private var importTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var sourceScanCache: SourceScanCache?
+    private var preparedImportSession: PreparedImportSession?
     private(set) var previewGeneration = 0
 
     var excludedExtensions: Set<String> {
@@ -157,6 +168,7 @@ final class ImportViewModel {
         manifestDestinationSuggestions = []
         manifestDestinationSearchWasLimited = false
         sourceAvailability = nil
+        preparedImportSession = nil
         scanScanned = 0
         scanTotal = 0
     }
@@ -271,6 +283,11 @@ final class ImportViewModel {
                 )
                 guard isPreviewRequestCurrent(request) else { return }
                 previewResult = preview
+                preparedImportSession = PreparedImportSession(
+                    request: request,
+                    preview: preview,
+                    duplicateChecker: checker
+                )
             } catch {
                 guard isPreviewRequestCurrent(request) else { return }
                 previewError = error.localizedDescription
@@ -343,9 +360,16 @@ final class ImportViewModel {
         let mode = TransferMode(rawValue: transferMode) ?? .copy
         let filter = activeFilter
         let cachedPreview = previewResult
+        let request = PreviewRequest(
+            generation: previewGeneration,
+            sourcePath: sourcePath,
+            destinationPath: destinationPath
+        )
+        let preparedSession = preparedImportSession
 
         previewTask?.cancel()
         previewResult = nil
+        preparedImportSession = nil
         isPreviewing = false
         dateFrom = nil
         dateTo = nil
@@ -353,40 +377,50 @@ final class ImportViewModel {
 
         importTask = Task {
             let engine = ImportEngine()
-            let checker = DuplicateChecker()
 
             do {
-                let indexStatus = try await checker.buildIndex(at: dst)
-                if case let .requiresUserAction(attention) = indexStatus {
-                    manifestAttention = attention
-                    progress.isImporting = false
-                    importTask = nil
-                    return
-                }
+                let checker: DuplicateChecker
+                let executionPlan: ImportExecutionPlan
 
-                let filesToImport: [PreviewFile]
-
-                if let cachedPreview {
-                    filesToImport = cachedPreview.filtered(by: filter)
+                if let preparedSession, preparedSession.matches(request) {
+                    checker = preparedSession.duplicateChecker
+                    try await checker.ensureReadyForImport(at: dst)
+                    executionPlan = preparedSession.preview.executionPlan(by: filter)
                 } else {
-                    let src = URL(fileURLWithPath: sourcePath)
-                    let resolver = PhotosLibraryResolver.resolve(for: src)
-                    let (_, preview) = try await engine.previewImport(
-                        source: src, duplicateChecker: checker, resolver: resolver
-                    )
-                    filesToImport = preview.filtered(by: filter)
+                    // This is a recovery path for callers without a retained
+                    // read-only preview. The normal UI path always uses the
+                    // prepared session above and avoids this second audit.
+                    checker = DuplicateChecker()
+                    let indexStatus = try await checker.buildIndex(at: dst)
+                    if case let .requiresUserAction(attention) = indexStatus {
+                        manifestAttention = attention
+                        progress.isImporting = false
+                        importTask = nil
+                        return
+                    }
+
+                    let preview: PreviewResult
+                    if let cachedPreview {
+                        preview = cachedPreview
+                    } else {
+                        let src = URL(fileURLWithPath: sourcePath)
+                        let resolver = PhotosLibraryResolver.resolve(for: src)
+                        let (_, scannedPreview) = try await engine.previewImport(
+                            source: src, duplicateChecker: checker, resolver: resolver
+                        )
+                        preview = scannedPreview
+                    }
+                    executionPlan = preview.executionPlan(by: filter)
                 }
 
-                let totalTransferBytes = filesToImport
-                    .filter { !$0.isDuplicate }
-                    .reduce(0) { $0 + $1.size }
                 progress.beginImport(
-                    totalFiles: filesToImport.count,
-                    totalTransferBytes: totalTransferBytes
+                    totalFiles: executionPlan.totalFiles,
+                    totalTransferBytes: executionPlan.totalTransferBytes
                 )
+                progress.recordDuplicatesSkipped(count: executionPlan.duplicateCount)
 
                 try await engine.importFiles(
-                    files: filesToImport,
+                    files: executionPlan.filesToTransfer,
                     destination: dst,
                     mode: mode,
                     duplicateChecker: checker,
@@ -421,6 +455,7 @@ final class ImportViewModel {
         isRebuildingManifest = true
         previewError = nil
         previewResult = nil
+        preparedImportSession = nil
 
         Task {
             let checker = DuplicateChecker()

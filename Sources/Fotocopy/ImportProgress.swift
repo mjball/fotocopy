@@ -100,8 +100,13 @@ final class ImportProgress {
     }
 
     func recordDuplicateSkipped() {
-        duplicatesSkipped += 1
-        processedFiles += 1
+        recordDuplicatesSkipped(count: 1)
+    }
+
+    func recordDuplicatesSkipped(count: Int) {
+        let count = max(0, count)
+        duplicatesSkipped += count
+        processedFiles += count
     }
 
     func recordSuccessfulTransfer(bytes: Int, destinationFolderPath: String? = nil) {

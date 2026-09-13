@@ -740,6 +740,22 @@ struct ImportEngineTests {
         #expect(preview.availableImportDateRange(by: filter)?.min == rawDate)
     }
 
+    @Test func executionPlanSeparatesKnownDuplicatesFromTransferWork() {
+        let includedDate = Date(timeIntervalSince1970: 2_000)
+        let preview = PreviewResult(files: [
+            PreviewFile(url: URL(fileURLWithPath: "/duplicate.jpg"), filename: "duplicate.jpg", ext: "jpg", size: 100, date: includedDate, dateSource: .exif, cameraModel: nil, isDuplicate: true),
+            PreviewFile(url: URL(fileURLWithPath: "/new.cr3"), filename: "new.cr3", ext: "cr3", size: 200, date: includedDate, dateSource: .exif, cameraModel: nil, isDuplicate: false),
+            PreviewFile(url: URL(fileURLWithPath: "/excluded.mov"), filename: "excluded.mov", ext: "mov", size: 300, date: includedDate, dateSource: .exif, cameraModel: nil, isDuplicate: false),
+        ])
+
+        let plan = preview.executionPlan(by: ImportFilter(excludedExtensions: ["mov"]))
+
+        #expect(plan.totalFiles == 2)
+        #expect(plan.duplicateCount == 1)
+        #expect(plan.totalTransferBytes == 200)
+        #expect(plan.filesToTransfer.map(\.filename) == ["new.cr3"])
+    }
+
     @Test func previewFileCarriesMetadata() async throws {
         let src = try makeTempDir()
         let dst = try makeTempDir()
