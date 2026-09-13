@@ -10,7 +10,6 @@ enum PreferenceKeys {
     static let activeWorkspace = "activeWorkspace"
     static let sourcePath = "sourcePath"
     static let destinationPath = "destinationPath"
-    static let transferMode = "transferMode"
     static let autoOpenSource = "autoOpenSource"
     static let autoOpenDestination = "autoOpenDestination"
     static let ejectSource = "ejectSource"
