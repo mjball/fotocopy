@@ -8,6 +8,21 @@ import Testing
     #expect(CullPreviewViewport.zoomAfterDoubleClick(from: CullPreviewViewport.maximumZoom) == CullPreviewViewport.minimumZoom)
 }
 
+@Test func previewViewportKeyboardZoomCentersOnDetailComparisonPoint() {
+    let detailPoint = CullInspectionPoint(x: 0.27, y: 0.73)
+    var viewport = CullPreviewViewport(center: CullInspectionPoint(x: 0.5, y: 0.5))
+
+    viewport.toggleFullZoom(centeringOn: detailPoint)
+
+    #expect(viewport.zoom == CullPreviewViewport.maximumZoom)
+    #expect(viewport.center == detailPoint)
+
+    viewport.toggleFullZoom(centeringOn: CullInspectionPoint(x: 0.9, y: 0.1))
+
+    #expect(viewport.zoom == CullPreviewViewport.minimumZoom)
+    #expect(viewport.center == detailPoint)
+}
+
 @Test func previewViewportClampsZoomToSharedBounds() {
     #expect(CullPreviewViewport(zoom: 0.5).zoom == CullPreviewViewport.minimumZoom)
     #expect(CullPreviewViewport(zoom: 10).zoom == CullPreviewViewport.maximumZoom)
@@ -461,6 +476,11 @@ import Testing
         charactersIgnoringModifiers: nil,
         shiftPressed: false
     ) == .moveBurst(1))
+    #expect(CullKeyboardShortcuts.action(
+        keyCode: 6,
+        charactersIgnoringModifiers: "z",
+        shiftPressed: false
+    ) == .toggleFullZoom)
     #expect(CullKeyboardShortcuts.action(
         keyCode: 123,
         charactersIgnoringModifiers: nil,

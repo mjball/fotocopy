@@ -49,6 +49,17 @@ struct CullPreviewViewport: Hashable {
     static func zoomAfterDoubleClick(from zoom: CGFloat) -> CGFloat {
         zoom > zoomedInThreshold ? minimumZoom : maximumZoom
     }
+
+    /// The keyboard shortcut follows the familiar double-click toggle while
+    /// making a new full zoom immediately useful for comparison: it centers
+    /// the main image on the current detail target (normally camera AF).
+    mutating func toggleFullZoom(centeringOn point: CullInspectionPoint?) {
+        let zoomedIn = zoom > Self.zoomedInThreshold
+        zoom = zoomedIn ? Self.minimumZoom : Self.maximumZoom
+        if !zoomedIn, let point {
+            center = point
+        }
+    }
 }
 
 /// Which target drives the detailed, frame-by-frame crop review. A manual
@@ -424,12 +435,13 @@ enum CullKeyboardAction: Equatable {
     case keepCurrentAndRejectRest
     case rejectCurrentFrame
     case rejectBurst
+    case toggleFullZoom
 
-    var isDecision: Bool {
+    var suppressesKeyRepeat: Bool {
         switch self {
         case .moveFrame, .moveBurst:
             false
-        case .keepCurrentFrame, .keepCurrentAndRejectRest, .rejectCurrentFrame, .rejectBurst:
+        case .keepCurrentFrame, .keepCurrentAndRejectRest, .rejectCurrentFrame, .rejectBurst, .toggleFullZoom:
             true
         }
     }
@@ -446,6 +458,8 @@ enum CullKeyboardShortcuts {
             return shiftPressed ? .keepCurrentAndRejectRest : .keepCurrentFrame
         case "x":
             return shiftPressed ? .rejectBurst : .rejectCurrentFrame
+        case "z":
+            return shiftPressed ? nil : .toggleFullZoom
         default:
             break
         }
