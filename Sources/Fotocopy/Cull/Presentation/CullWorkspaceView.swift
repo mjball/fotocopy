@@ -21,12 +21,12 @@ struct CullWorkspaceView: View {
                 CullNavigationKeyHandler(
                     moveFrame: { model.moveSelectedReviewFrame(by: $0) },
                     moveBurst: { model.moveSelectedReviewGroup(by: $0) },
-                    keepCurrentFrame: { model.keepSelectedFrame() },
+                    keepCurrentFrame: { model.keepSelection() },
                     keepCurrentAndRejectRest: {
                         guard let burst = model.selectedBurst else { return }
                         model.keepSelectedAndRejectRest(in: burst)
                     },
-                    rejectCurrentFrame: { model.rejectSelectedFrame() },
+                    rejectCurrentFrame: { model.rejectSelection() },
                     rejectBurst: {
                         guard let burst = model.selectedBurst else { return }
                         model.markAllRejecting(in: burst)
@@ -615,13 +615,13 @@ private struct SingleFrameReviewView: View {
     @ViewBuilder
     private var decisionControls: some View {
         HStack(spacing: 7) {
-            Button(model.isKeeping(frame.url) ? "Kept" : "Keep") {
-                model.isKeeping(frame.url) ? model.clearSelectedFrameDisposition() : model.keepSelectedFrame()
+            Button(model.selectionActionTitle("Keep")) {
+                model.keepSelection()
             }
             .buttonStyle(.borderedProminent)
 
-            Button(model.isRejecting(frame.url) ? "Rejected" : "Reject") {
-                model.isRejecting(frame.url) ? model.clearSelectedFrameDisposition() : model.rejectSelectedFrame()
+            Button(model.selectionActionTitle("Reject")) {
+                model.rejectSelection()
             }
             .buttonStyle(.bordered)
 
@@ -736,13 +736,13 @@ private struct SingleFrameReviewView: View {
 
     private var compactDecisionControls: some View {
         HStack(spacing: 7) {
-            Button(model.isKeeping(frame.url) ? "Kept" : "Keep") {
-                model.isKeeping(frame.url) ? model.clearSelectedFrameDisposition() : model.keepSelectedFrame()
+            Button(model.selectionActionTitle("Keep")) {
+                model.keepSelection()
             }
             .buttonStyle(.borderedProminent)
 
-            Button(model.isRejecting(frame.url) ? "Rejected" : "Reject") {
-                model.isRejecting(frame.url) ? model.clearSelectedFrameDisposition() : model.rejectSelectedFrame()
+            Button(model.selectionActionTitle("Reject")) {
+                model.rejectSelection()
             }
             .buttonStyle(.bordered)
         }
@@ -927,14 +927,14 @@ private struct BurstReviewView: View {
                 Text("Frames")
                     .font(.headline)
                 Spacer()
-                if let selectedFrame {
-                    Button(model.isKeeping(selectedFrame.url) ? "Kept" : "Keep") {
-                        model.isKeeping(selectedFrame.url) ? model.clearSelectedFrameDisposition() : model.keepSelectedFrame()
+                if selectedFrame != nil {
+                    Button(model.selectionActionTitle("Keep")) {
+                        model.keepSelection()
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button(model.isRejecting(selectedFrame.url) ? "Rejected" : "Reject") {
-                        model.isRejecting(selectedFrame.url) ? model.clearSelectedFrameDisposition() : model.rejectSelectedFrame()
+                    Button(model.selectionActionTitle("Reject")) {
+                        model.rejectSelection()
                     }
                     .buttonStyle(.bordered)
 
@@ -1303,15 +1303,15 @@ private struct BurstReviewView: View {
 
     private var compactDecisionControls: some View {
         HStack(spacing: 7) {
-            if let selectedFrame {
-                Button(model.isKeeping(selectedFrame.url) ? "Kept" : "Keep") {
-                    model.toggleKeeping(selectedFrame.url)
+            if selectedFrame != nil {
+                Button(model.selectionActionTitle("Keep")) {
+                    model.keepSelection()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isMoving)
 
-                Button(model.isRejecting(selectedFrame.url) ? "Rejected" : "Reject") {
-                    model.toggleRejecting(selectedFrame.url)
+                Button(model.selectionActionTitle("Reject")) {
+                    model.rejectSelection()
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.isMoving)
@@ -2386,6 +2386,16 @@ final class CullViewModel {
         return frames.filter { selectedURLs.contains($0.url) }
     }
 
+    private var selectedReviewFrames: [CullPhoto] {
+        guard let selectedReviewGroup else { return [] }
+        return selectedFrames(in: visibleFrames(in: selectedReviewGroup))
+    }
+
+    func selectionActionTitle(_ action: String) -> String {
+        let count = selectedReviewFrames.count
+        return count > 1 ? "\(action) \(count)" : action
+    }
+
     func previewSelection(in frames: [CullPhoto]) -> CullPreviewSelection {
         let selectedURLs = selectedFrames(in: frames).map(\.url)
         switch selectedURLs.count {
@@ -3005,41 +3015,27 @@ final class CullViewModel {
         dispositions[url] == .reject
     }
 
-    func toggleKeeping(_ url: URL) {
-        let disposition: CullDisposition? = isKeeping(url) ? nil : .select
-        moveDisposition(of: url, to: disposition, advanceAfterMove: disposition != nil)
+    /// Keep and Reject always operate on the complete blue selection. A
+    /// one-image selection is the same operation with one relocation.
+    func keepSelection() {
+        moveSelection(to: .select)
     }
 
-    func toggleRejecting(_ url: URL) {
-        let disposition: CullDisposition? = isRejecting(url) ? nil : .reject
-        moveDisposition(of: url, to: disposition, advanceAfterMove: disposition != nil)
+    func rejectSelection() {
+        moveSelection(to: .reject)
     }
 
-    /// Keyboard decisions are idempotent: repeated K or X presses never turn
-    /// a prior decision back into an unmarked frame.
-    func keepSelectedFrame() {
-        guard let selectedFrameURL else { return }
-        moveDisposition(
-            of: selectedFrameURL,
-            to: .select,
-            advanceAfterMove: !isReviewingSingles,
-            advanceAfterMovingSingleFrame: isReviewingSingles ? selectedFrameURL : nil
+    private func moveSelection(to disposition: CullDisposition) {
+        let frames = selectedReviewFrames
+        guard !frames.isEmpty else { return }
+
+        let selectedURLs = Set(frames.map(\.url))
+        let advancingURL = selectedFrameURL.flatMap { selectedURLs.contains($0) ? $0 : nil } ?? frames.last?.url
+        moveDispositions(
+            frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: disposition) },
+            advanceAfterMoving: isReviewingSingles ? nil : advancingURL,
+            advanceAfterMovingSingleFrame: isReviewingSingles ? advancingURL : nil
         )
-    }
-
-    func rejectSelectedFrame() {
-        guard let selectedFrameURL else { return }
-        moveDisposition(
-            of: selectedFrameURL,
-            to: .reject,
-            advanceAfterMove: !isReviewingSingles,
-            advanceAfterMovingSingleFrame: isReviewingSingles ? selectedFrameURL : nil
-        )
-    }
-
-    func clearSelectedFrameDisposition() {
-        guard let selectedFrameURL else { return }
-        moveDisposition(of: selectedFrameURL, to: nil)
     }
 
     func keepSelectedAndRejectRest(in burst: PhotoBurst) {
