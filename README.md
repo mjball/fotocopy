@@ -11,7 +11,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 - Imports JPG, HEIC, RAW (`CR2`/`CR3`/`NEF`/`ARW`/`DNG`/`RAF`/`ORF`/`RW2`), and video (`MOV`/`MP4`/`M4V`) from cards, external drives, and Apple Photos libraries.
 - Organizes imports into `YYYY/MM/DD/` folders using the capture date, while retaining original camera filenames.
 - Previews an import before copying, with file-type, camera-model, and date-range filters.
-- Supports copy or move imports; move is deliberately unavailable for Apple Photos libraries.
+- Makes copying the prominent default action. Moving originals is a separate, confirmed destructive action and is unavailable for Apple Photos libraries.
 - Uses a destination manifest to identify prior imports conservatively—even when cameras reuse filenames—and reconciles later Finder moves within a date folder.
 - Reuses a completed import preview for the subsequent transfer, so already-known duplicates are settled immediately and only new files are copied or moved.
 - Recovers from an accidentally selected drive root by looking briefly for an existing Fotocopy manifest before scanning media; a single matching library is selected automatically, while multiple matches require your choice.

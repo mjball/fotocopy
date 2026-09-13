@@ -381,6 +381,39 @@ struct ImportViewModelTests {
         #expect(vm.progress.duplicatesSkipped == 1)
     }
 
+    @Test func startImportMovesSourceOnlyWhenExplicitlyRequested() async throws {
+        let source = try makeTempDir()
+        let destination = try makeTempDir()
+        defer { cleanup(source); cleanup(destination) }
+
+        let importable = source.appendingPathComponent("move-me.jpg")
+        try Data(repeating: 0x01, count: 256).write(to: importable)
+
+        let vm = ImportViewModel()
+        vm.sourcePath = source.path
+        vm.destinationPath = destination.path
+        vm.previewResult = PreviewResult(files: [
+            PreviewFile(
+                url: importable,
+                filename: "move-me.jpg",
+                ext: "jpg",
+                size: 256,
+                date: Date(timeIntervalSince1970: 1_700_000_000),
+                dateSource: .exif,
+                cameraModel: nil,
+                isDuplicate: false
+            )
+        ])
+
+        vm.startImport(mode: .move)
+        while !vm.progress.isComplete {
+            await Task.yield()
+        }
+
+        #expect(vm.progress.errors.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: importable.path) == false)
+    }
+
     @Test func importUsesCompletedPreviewInsteadOfRevalidatingDestination() async throws {
         let source = try makeTempDir()
         let destination = try makeTempDir()

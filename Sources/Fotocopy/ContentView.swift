@@ -3,7 +3,6 @@ import SwiftUI
 struct ContentView: View {
     @AppStorage(PreferenceKeys.sourcePath) private var sourcePath = ""
     @AppStorage(PreferenceKeys.destinationPath) private var destinationPath = ""
-    @AppStorage(PreferenceKeys.transferMode) private var transferMode = TransferMode.copy.rawValue
     @AppStorage(PreferenceKeys.autoOpenSource) private var autoOpenSource = false
     @AppStorage(PreferenceKeys.autoOpenDestination) private var autoOpenDestination = false
     @AppStorage(PreferenceKeys.ejectSource) private var ejectSource = false
@@ -13,11 +12,11 @@ struct ContentView: View {
 
     @State private var vm = ImportViewModel()
     @State private var volumeWatcher = VolumeWatcher()
+    @State private var showingMoveConfirmation = false
 
     var body: some View {
         VStack(spacing: 16) {
             pathSection
-            modeSection
             if !vm.progress.isComplete {
                 if vm.isPreviewing || vm.isRebuildingManifest || vm.manifestAttention != nil || !vm.manifestDestinationSuggestions.isEmpty || vm.sourceAvailability != nil || vm.previewResult != nil || vm.previewError != nil {
                     previewSection
@@ -38,7 +37,6 @@ struct ContentView: View {
         .onChange(of: autoOpenDestination) { _, _ in updateVolumeWatching() }
         .onChange(of: excludedExtensionsRaw) { _, new in vm.excludedExtensionsRaw = new }
         .onChange(of: excludedCameraModelsRaw) { _, new in vm.excludedCameraModelsRaw = new }
-        .onChange(of: transferMode) { _, new in vm.transferMode = new }
         .onChange(of: vm.automaticallySelectedDestinationPath) { _, recoveredPath in
             guard let recoveredPath, destinationPath != recoveredPath else { return }
             destinationPath = recoveredPath
@@ -58,7 +56,6 @@ struct ContentView: View {
         .onAppear {
             vm.sourcePath = sourcePath
             vm.destinationPath = destinationPath
-            vm.transferMode = transferMode
             vm.excludedExtensionsRaw = excludedExtensionsRaw
             vm.excludedCameraModelsRaw = excludedCameraModelsRaw
             updateVolumeWatching()
@@ -73,9 +70,6 @@ struct ContentView: View {
     private func syncAndPreview() {
         vm.sourcePath = sourcePath
         vm.destinationPath = destinationPath
-        if vm.isPhotosLibrarySource {
-            transferMode = TransferMode.copy.rawValue
-        }
         vm.runPreview()
     }
 
@@ -153,34 +147,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Mode section
-
-    private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Mode:")
-                    .frame(width: 80, alignment: .trailing)
-                Picker("", selection: $transferMode) {
-                    Text("Copy").tag(TransferMode.copy.rawValue)
-                    Text("Move (delete source)").tag(TransferMode.move.rawValue)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 240)
-                .disabled(vm.isPhotosLibrarySource)
-                Spacer()
-            }
-            if vm.isPhotosLibrarySource {
-                HStack {
-                    Spacer()
-                        .frame(width: 84)
-                    Label("Move disabled — would corrupt Photos library", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-        }
-    }
-
     // MARK: - Action section
 
     private var actionSection: some View {
@@ -190,19 +156,17 @@ struct ContentView: View {
                     .tint(.red)
             } else {
                 Button("Import") {
-                    if let spaceError = vm.checkDiskSpace() {
-                        let alert = NSAlert()
-                        alert.messageText = "Not enough disk space"
-                        alert.informativeText = spaceError
-                        alert.alertStyle = .warning
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
-                        return
-                    }
-                    vm.startImport()
+                    startImport(mode: .copy)
                 }
                 .disabled(vm.isImportDisabled)
-                .keyboardShortcut(.return, modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .controlSize(.large)
+
+                Button("Move…", role: .destructive) {
+                    showingMoveConfirmation = true
+                }
+                .disabled(vm.isImportDisabled || vm.isPhotosLibrarySource)
                 .controlSize(.large)
             }
             if let reason = vm.importDisabledReason, !vm.progress.isImporting, !vm.progress.isComplete {
@@ -210,8 +174,34 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if vm.isPhotosLibrarySource, !vm.progress.isImporting {
+                Text("Move unavailable for Apple Photos libraries")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
         }
+        .alert("Move originals?", isPresented: $showingMoveConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Move", role: .destructive) {
+                startImport(mode: .move)
+            }
+        } message: {
+            Text("Fotocopy will copy the selected files, then remove the originals from the source folder. This can’t be undone in Fotocopy.")
+        }
+    }
+
+    private func startImport(mode: TransferMode) {
+        if let spaceError = vm.checkDiskSpace() {
+            let alert = NSAlert()
+            alert.messageText = "Not enough disk space"
+            alert.informativeText = spaceError
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        vm.startImport(mode: mode)
     }
 
     // MARK: - Preview section

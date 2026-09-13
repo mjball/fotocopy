@@ -39,7 +39,6 @@ enum SourcePathAvailability: Equatable {
 final class ImportViewModel {
     var sourcePath = ""
     var destinationPath = ""
-    var transferMode = TransferMode.copy.rawValue
     var excludedExtensionsRaw = ""
     var excludedCameraModelsRaw = ""
 
@@ -353,11 +352,10 @@ final class ImportViewModel {
         return nil
     }
 
-    func startImport() {
+    func startImport(mode: TransferMode = .copy) {
         progress.reset()
 
         let dst = URL(fileURLWithPath: destinationPath)
-        let mode = TransferMode(rawValue: transferMode) ?? .copy
         let filter = activeFilter
         let cachedPreview = previewResult
         let request = PreviewRequest(
