@@ -381,6 +381,40 @@ struct ImportViewModelTests {
         #expect(vm.progress.duplicatesSkipped == 1)
     }
 
+    @Test func importUsesCompletedPreviewInsteadOfRevalidatingDestination() async throws {
+        let source = try makeTempDir()
+        let destination = try makeTempDir()
+        defer { cleanup(source); cleanup(destination) }
+
+        let importable = source.appendingPathComponent("importable.jpg")
+        try Data(repeating: 0x01, count: 256).write(to: importable)
+
+        let vm = ImportViewModel()
+        vm.sourcePath = source.path
+        vm.destinationPath = destination.path
+        vm.runPreview()
+
+        for _ in 0 ..< 10_000 where vm.isPreviewing {
+            await Task.yield()
+        }
+        #expect(vm.previewResult != nil)
+
+        // A Finder change after the preview would make a second destination
+        // reconciliation reject the import. The completed preview is the
+        // deliberate snapshot used for this import; the next preview audits
+        // this file normally.
+        try Data(repeating: 0x02, count: 64).write(to: destination.appendingPathComponent("finder-added.jpg"))
+
+        vm.startImport()
+        for _ in 0 ..< 10_000 where !vm.progress.isComplete {
+            await Task.yield()
+        }
+
+        #expect(vm.progress.errors.isEmpty)
+        #expect(vm.progress.processedFiles == 1)
+        #expect(FileManager.default.fileExists(atPath: importable.path) == true)
+    }
+
     private func makeTempDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

@@ -38,6 +38,22 @@ actor DuplicateChecker {
         existing.contains(makeDuplicateKey(filename: filename, size: size, sourceBucket: sourceBucket))
     }
 
+    /// A completed preview owns a prepared checker. Before consuming that
+    /// preview, make the cheap check that its manifest still exists instead of
+    /// recursively reconciling the destination again. A later preview remains
+    /// the point where Finder changes are fully audited.
+    func ensureReadyForImport(at destinationURL: URL) throws {
+        guard let manifest,
+              manifest.destinationURL.standardizedFileURL == destinationURL.standardizedFileURL,
+              FileManager.default.fileExists(atPath: manifest.databaseURL.path) else {
+            throw NSError(
+                domain: "DuplicateChecker",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Destination manifest changed after the preview. Rescan before importing."]
+            )
+        }
+    }
+
     func markImported(
         filename: String,
         size: Int,

@@ -115,6 +115,41 @@ struct PreviewResult: Sendable {
         let dupes = matched.filter(\.isDuplicate).count
         return (matched.count, matched.count - dupes, dupes)
     }
+
+    /// Converts a completed, read-only preview into the exact work that an
+    /// import needs to perform. Duplicate decisions have already been made by
+    /// the preview, so the transfer phase only receives files that can copy or
+    /// move.
+    func executionPlan(by filter: ImportFilter) -> ImportExecutionPlan {
+        var filesToTransfer: [PreviewFile] = []
+        var duplicateCount = 0
+        var totalCount = 0
+        var totalTransferBytes = 0
+
+        for file in files where filter.includes(file) {
+            totalCount += 1
+            if file.isDuplicate {
+                duplicateCount += 1
+            } else {
+                filesToTransfer.append(file)
+                totalTransferBytes += file.size
+            }
+        }
+
+        return ImportExecutionPlan(
+            filesToTransfer: filesToTransfer,
+            totalFiles: totalCount,
+            duplicateCount: duplicateCount,
+            totalTransferBytes: totalTransferBytes
+        )
+    }
+}
+
+struct ImportExecutionPlan: Sendable {
+    let filesToTransfer: [PreviewFile]
+    let totalFiles: Int
+    let duplicateCount: Int
+    let totalTransferBytes: Int
 }
 
 actor ImportEngine {
@@ -265,19 +300,26 @@ actor ImportEngine {
     ) async throws {
         let fm = FileManager.default
         let maxConcurrency = 8
+        let knownDuplicateCount = files.reduce(into: 0) { count, file in
+            if file.isDuplicate {
+                count += 1
+            }
+        }
+
+        // Callers that use ImportExecutionPlan pass only new files. Keep this
+        // aggregate fallback for direct engine users, but never perform a
+        // MainActor hop for every previously classified duplicate.
+        if knownDuplicateCount > 0 {
+            await MainActor.run {
+                progress.recordDuplicatesSkipped(count: knownDuplicateCount)
+            }
+        }
 
         await withThrowingTaskGroup(of: Void.self) { group in
             var running = 0
 
-            for file in files {
+            for file in files where !file.isDuplicate {
                 if Task.isCancelled { break }
-
-                if file.isDuplicate {
-                    await MainActor.run {
-                        progress.recordDuplicateSkipped()
-                    }
-                    continue
-                }
 
                 if running >= maxConcurrency {
                     _ = try? await group.next()

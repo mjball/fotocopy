@@ -111,6 +111,18 @@ struct ImportProgressTests {
         #expect(progress.remainingTransferBytes == 500)
     }
 
+    @Test func batchDuplicateSkipSettlesAllKnownDuplicatesAtOnce() {
+        let progress = ImportProgress()
+        progress.beginImport(totalFiles: 10_000, totalTransferBytes: 500)
+        progress.recordDuplicatesSkipped(count: 9_999)
+
+        #expect(progress.processedFiles == 9_999)
+        #expect(progress.duplicatesSkipped == 9_999)
+        #expect(progress.transferredBytes == 0)
+        #expect(progress.settledTransferBytes == 0)
+        #expect(progress.remainingTransferBytes == 500)
+    }
+
     @Test func failedTransferSettlesBytesWithoutThroughput() {
         let progress = ImportProgress()
         progress.beginImport(totalFiles: 1, totalTransferBytes: 1_024)
