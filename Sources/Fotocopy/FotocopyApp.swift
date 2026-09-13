@@ -314,14 +314,14 @@ private struct CullCommands: Commands {
 
             Divider()
 
-            Button("Keep Current Frame") {
-                model.keepSelectedFrame()
+            Button(model.selectionActionTitle("Keep")) {
+                model.keepSelection()
             }
             .keyboardShortcut("k", modifiers: [])
             .disabled(!canReviewFrame)
 
-            Button("Reject Current Frame") {
-                model.rejectSelectedFrame()
+            Button(model.selectionActionTitle("Reject")) {
+                model.rejectSelection()
             }
             .keyboardShortcut("x", modifiers: [])
             .disabled(!canReviewFrame)

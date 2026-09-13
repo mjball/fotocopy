@@ -9,7 +9,7 @@ struct CullDecisionSelectionSyncTests {
         let fixture = try makeSingleFrameModel()
         defer { try? FileManager.default.removeItem(at: fixture.folderURL) }
 
-        fixture.model.keepSelectedFrame()
+        fixture.model.keepSelection()
 
         try await waitForDecisionAdvance(in: fixture.model, expectedFrameURL: fixture.secondURL)
         #expect(fixture.model.previewSelection(in: fixture.frames) == .single(fixture.secondURL))
@@ -20,7 +20,7 @@ struct CullDecisionSelectionSyncTests {
         let fixture = try makeSingleFrameModel()
         defer { try? FileManager.default.removeItem(at: fixture.folderURL) }
 
-        fixture.model.rejectSelectedFrame()
+        fixture.model.rejectSelection()
 
         try await waitForDecisionAdvance(in: fixture.model, expectedFrameURL: fixture.secondURL)
         #expect(fixture.model.previewSelection(in: fixture.frames) == .single(fixture.secondURL))
@@ -51,11 +51,30 @@ struct CullDecisionSelectionSyncTests {
         fixture.model.selectSingleFrame(fixture.secondURL, extendingQuickExportSelection: true)
         #expect(fixture.model.previewSelection(in: fixture.frames) == .grid([fixture.firstURL, fixture.secondURL]))
 
-        fixture.model.keepSelectedFrame()
+        fixture.model.keepSelection()
 
         try await waitForDecisionAdvance(in: fixture.model, expectedFrameURL: fixture.thirdURL)
         #expect(fixture.model.previewSelection(in: fixture.frames) == .single(fixture.thirdURL))
         #expect(fixture.model.selectedQuickExportURLs == [fixture.thirdURL])
+        #expect(FileManager.default.fileExists(atPath: fixture.folderURL.appendingPathComponent("Keeps/IMG_0001.CR3").path))
+        #expect(FileManager.default.fileExists(atPath: fixture.folderURL.appendingPathComponent("Keeps/IMG_0002.CR3").path))
+        #expect(FileManager.default.fileExists(atPath: fixture.thirdURL.path))
+    }
+
+    @Test func rejectingThePreviewGridMovesOnlyTheBlueSelectedImages() async throws {
+        let fixture = try makeSingleFrameModel()
+        defer { try? FileManager.default.removeItem(at: fixture.folderURL) }
+
+        fixture.model.selectSingleFrame(fixture.firstURL)
+        fixture.model.selectSingleFrame(fixture.secondURL, extendingQuickExportSelection: true)
+
+        fixture.model.rejectSelection()
+
+        try await waitForDecisionAdvance(in: fixture.model, expectedFrameURL: fixture.thirdURL)
+        #expect(fixture.model.previewSelection(in: fixture.frames) == .single(fixture.thirdURL))
+        #expect(FileManager.default.fileExists(atPath: fixture.folderURL.appendingPathComponent("Rejects/IMG_0001.CR3").path))
+        #expect(FileManager.default.fileExists(atPath: fixture.folderURL.appendingPathComponent("Rejects/IMG_0002.CR3").path))
+        #expect(FileManager.default.fileExists(atPath: fixture.thirdURL.path))
     }
 
     private func makeSingleFrameModel() throws -> (model: CullViewModel, folderURL: URL, firstURL: URL, secondURL: URL, thirdURL: URL, frames: [CullPhoto]) {
