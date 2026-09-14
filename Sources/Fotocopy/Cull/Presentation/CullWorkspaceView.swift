@@ -5,6 +5,7 @@ import SwiftUI
 struct CullWorkspaceView: View {
     @Bindable var model: CullViewModel
     @Binding var layout: CullReviewLayout
+    @AppStorage(PreferenceKeys.destinationPath) private var configuredLibraryPath = ""
 
     var body: some View {
         detail
@@ -39,6 +40,10 @@ struct CullWorkspaceView: View {
         .task {
             model.resumeLastScanIfNeeded()
             model.library.refreshImageStatisticsIfNeeded()
+            model.refreshCullFolderQueueIfNeeded()
+        }
+        .onChange(of: configuredLibraryPath) {
+            model.refreshCullFolderQueue()
         }
         .alert("Could not scan folder", isPresented: $model.showError) {
             Button("OK", role: .cancel) { }
@@ -228,6 +233,7 @@ private struct SingleFrameFilterPicker: View {
 /// navigation fixed while changing between Import and Cull.
 struct CullSidebarSections: View {
     @Bindable var model: CullViewModel
+    @State private var showsReviewedFolders = false
 
     var body: some View {
         Section("Cull") {
@@ -242,6 +248,10 @@ struct CullSidebarSections: View {
             }
 
             sourcePickerControls
+        }
+
+        if model.hasCullFolderQueueSource {
+            folderReviewQueue
         }
 
         if model.isScanning {
@@ -313,6 +323,126 @@ struct CullSidebarSections: View {
                 Button("Reveal Folder in Finder") { model.revealFolder() }
             }
         }
+    }
+
+    private var folderReviewQueue: some View {
+        Section {
+            if model.cullFolderReviewSnapshot == nil, model.isRefreshingCullFolderQueue {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Finding date folders…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let error = model.cullFolderQueueError,
+                      model.cullFolderReviewSnapshot == nil {
+                Label("Couldn’t read review folders", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help(error)
+            } else if model.cullFoldersNeedingReview.isEmpty {
+                Label("All folders reviewed", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                ForEach(model.cullFoldersNeedingReview) { summary in
+                    folderQueueRow(summary, isReviewed: false)
+                }
+            }
+
+            if !model.reviewedCullFolders.isEmpty {
+                DisclosureGroup(
+                    "Completed (\(model.reviewedCullFolders.count))",
+                    isExpanded: $showsReviewedFolders
+                ) {
+                    ForEach(model.reviewedCullFolders) { summary in
+                        folderQueueRow(summary, isReviewed: true)
+                    }
+                }
+                .font(.caption)
+            }
+
+            if let error = model.cullFolderQueueError,
+               model.cullFolderReviewSnapshot != nil {
+                Label("Refresh failed; showing the previous result", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .help(error)
+            }
+        } header: {
+            HStack {
+                Text("Needs review")
+                Spacer()
+                if model.isRefreshingCullFolderQueue {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .accessibilityLabel("Refreshing review folders")
+                } else {
+                    Button {
+                        model.refreshCullFolderQueue()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isScanning || model.isMoving)
+                    .accessibilityLabel("Refresh review folders")
+                    .help("Refresh unreviewed counts after changes made outside Fotocopy")
+                }
+            }
+        }
+    }
+
+    private func folderQueueRow(
+        _ summary: CullFolderReviewSummary,
+        isReviewed: Bool
+    ) -> some View {
+        let isCurrent = summary.folderURL == model.folderURL?.standardizedFileURL
+        return Button {
+            guard !isCurrent else { return }
+            model.requestUse(folder: summary.folderURL)
+        } label: {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: isReviewed ? "checkmark.circle.fill" : "circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(isReviewed ? .green : .orange)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(summary.dateLabel)
+                        .lineLimit(1)
+                    Text(folderQueueDetail(summary, isReviewed: isReviewed))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if isCurrent {
+                    Image(systemName: "chevron.right.circle.fill")
+                        .foregroundStyle(.tint)
+                        .accessibilityLabel("Current folder")
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isScanning || model.isMoving)
+        .help(summary.folderURL.path)
+        .accessibilityLabel(
+            isReviewed
+                ? "\(summary.dateLabel), reviewed, \(summary.totalCount) photos"
+                : "\(summary.dateLabel), \(summary.unreviewedCount) unreviewed of \(summary.totalCount) photos"
+        )
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+    }
+
+    private func folderQueueDetail(
+        _ summary: CullFolderReviewSummary,
+        isReviewed: Bool
+    ) -> String {
+        if isReviewed {
+            return "\(summary.totalCount) reviewed"
+        }
+        return "\(summary.unreviewedCount) unreviewed · \(summary.totalCount) total"
     }
 
     @ViewBuilder
@@ -2320,6 +2450,9 @@ final class CullViewModel {
     var isQuickExporting = false
     private(set) var previousCullFolderURL: URL?
     private(set) var nextCullFolderURL: URL?
+    private(set) var cullFolderReviewSnapshot: CullFolderReviewSnapshot?
+    private(set) var isRefreshingCullFolderQueue = false
+    private(set) var cullFolderQueueError: String?
     var selectedFrameURL: URL?
     /// Singles open as a visual timeline. Keep/Reject moves selection to the
     /// next undecided photo but leaves its decided thumbnail visible.
@@ -2337,7 +2470,8 @@ final class CullViewModel {
     private var preferredFrameURLAfterScan: URL?
     private var selectsLastReviewGroupAfterScan = false
     private var selectsLastFrameAfterScan = false
-    private var folderNavigationTask: Task<Void, Never>?
+    private var cullFolderQueueTask: Task<Void, Never>?
+    private var cullFolderQueueGeneration = 0
     private var cullRefreshNoticeTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
     private let quickExportNotifier: any QuickExportNotifying
@@ -2357,6 +2491,18 @@ final class CullViewModel {
         return paths
             .map { URL(fileURLWithPath: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    var hasCullFolderQueueSource: Bool {
+        activeCullFolderQueueRoot != nil || cullFolderReviewSnapshot != nil
+    }
+
+    var cullFoldersNeedingReview: [CullFolderReviewSummary] {
+        cullFolderReviewSnapshot?.foldersNeedingReview ?? []
+    }
+
+    var reviewedCullFolders: [CullFolderReviewSummary] {
+        cullFolderReviewSnapshot?.reviewedFolders ?? []
     }
 
     var selectedReviewGroupID: CullReviewGroupID? {
@@ -2511,6 +2657,7 @@ final class CullViewModel {
     func showBurstCulling() {
         resumeLastScanIfNeeded()
         library.refreshImageStatisticsIfNeeded()
+        refreshCullFolderQueueIfNeeded()
         if selectedReviewGroup == nil,
            let groupID = CullReviewGroupNavigation.initialGroupID(
                in: scanResult?.reviewGroups ?? [],
@@ -2549,7 +2696,10 @@ final class CullViewModel {
 
     func scan() {
         library.refreshImageStatistics()
-        startScan(preferring: selectedReviewGroupID)
+        startScan(
+            preferring: selectedReviewGroupID,
+            refreshFolderQueueAfterScan: true
+        )
     }
 
     /// The last reviewed date folder is retained between launches. Start a
@@ -2566,7 +2716,8 @@ final class CullViewModel {
         selectingLastFrame: Bool = false,
         preferringFrameURL: URL? = nil,
         refreshProgressMessage: String? = nil,
-        refreshCompletionNotice: String? = nil
+        refreshCompletionNotice: String? = nil,
+        refreshFolderQueueAfterScan: Bool = false
     ) {
         guard let folderURL, !isScanning, !isMoving else { return }
         preferredReviewGroupIDAfterScan = preferredReviewGroupID
@@ -2574,7 +2725,7 @@ final class CullViewModel {
         selectsLastReviewGroupAfterScan = selectingLastReviewGroup
         selectsLastFrameAfterScan = selectingLastFrame
         cullRefreshProgressMessage = refreshProgressMessage
-        refreshCullFolderNavigation(for: folderURL)
+        prepareCullFolderQueueForActiveScan(in: folderURL)
         scanTask?.cancel()
         scanResult = nil
         dispositions.removeAll()
@@ -2597,6 +2748,8 @@ final class CullViewModel {
         let model = self
         let workers = CullSettings.scanWorkerCount
         scanTask = Task {
+            var shouldResumeFolderQueue = true
+            var completedScan: CullFolderScan?
             do {
                 let result = try await Task.detached(priority: .userInitiated) {
                     try await BurstGroupingEngine.scan(
@@ -2613,6 +2766,7 @@ final class CullViewModel {
 
                 guard !Task.isCancelled else { return }
                 scanResult = result
+                completedScan = result
                 dispositions = Self.onDiskDispositions(in: result)
                 let preferredFrameGroupID = preferredFrameURLAfterScan.flatMap { preferredFrameURL in
                     result.reviewGroups.first { group in
@@ -2644,6 +2798,7 @@ final class CullViewModel {
                 }
             } catch is CancellationError {
                 // A new scan replaced this one.
+                shouldResumeFolderQueue = false
             } catch {
                 errorMessage = error.localizedDescription
                 showError = true
@@ -2651,6 +2806,16 @@ final class CullViewModel {
             isScanning = false
             cullRefreshProgressMessage = nil
             scanTask = nil
+            if let completedScan {
+                updateCullFolderReviewSummary(from: completedScan)
+            }
+            if shouldResumeFolderQueue {
+                if refreshFolderQueueAfterScan {
+                    refreshCullFolderQueue()
+                } else {
+                    refreshCullFolderQueueIfNeeded()
+                }
+            }
         }
     }
 
@@ -2658,6 +2823,11 @@ final class CullViewModel {
     /// Organize sends those files to Finder's Trash, rebuild the active day
     /// from disk instead of continuing to render stale preview URLs.
     func refreshAfterTrashingRejects(_ result: CullLibraryTrashResult) {
+        if var snapshot = cullFolderReviewSnapshot {
+            snapshot.removeTrashedRejects(result.trashedPrimaryPhotoURLs)
+            cullFolderReviewSnapshot = snapshot
+            updateCullFolderNeighbors()
+        }
         guard let folderURL, !result.trashedPrimaryPhotoURLs.isEmpty else { return }
         let affectedURLs = CullTrashRefreshPolicy.trashedFrameURLs(
             in: folderURL,
@@ -2697,47 +2867,147 @@ final class CullViewModel {
         currentFilename = "Cancelled"
     }
 
-    /// Folder discovery walks only the three date-directory levels and checks
-    /// filenames, so it never decodes photos or reads their metadata. Run it
-    /// off the main actor to keep the current review responsive on an external
-    /// drive.
-    private func refreshCullFolderNavigation(for currentFolder: URL) {
-        folderNavigationTask?.cancel()
-        previousCullFolderURL = nil
-        nextCullFolderURL = nil
+    /// The queue and previous/next navigation share one shallow directory
+    /// snapshot. It starts only after the foreground review scan is usable and
+    /// runs at utility priority so a slow external drive never blocks culling.
+    func refreshCullFolderQueueIfNeeded() {
+        guard !isScanning, !isMoving else { return }
+        guard let root = activeCullFolderQueueRoot else {
+            clearCullFolderQueue()
+            return
+        }
+        if cullFolderReviewSnapshot?.libraryRootURL == root {
+            updateCullFolderNeighbors()
+            return
+        }
+        refreshCullFolderQueue()
+    }
 
-        let roots = [library.configuredLibraryURL, CullFolderNavigation.libraryRoot(containing: currentFolder)]
-            .compactMap { $0 }
-            .reduce(into: [URL]()) { roots, root in
-                if !roots.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
-                    roots.append(root)
-                }
-            }
-        guard !roots.isEmpty else { return }
+    func refreshCullFolderQueue() {
+        guard !isScanning, !isMoving else { return }
+        guard let root = activeCullFolderQueueRoot else {
+            clearCullFolderQueue()
+            return
+        }
 
-        let standardizedCurrentFolder = currentFolder.standardizedFileURL
-        folderNavigationTask = Task { [weak self] in
-            let neighbors = await Task.detached(priority: .utility) { () -> CullFolderNeighbors? in
-                for root in roots {
-                    if let neighbors = CullFolderNavigation.neighbors(
-                        of: standardizedCurrentFolder,
-                        in: root
+        cancelCullFolderQueueRefresh()
+        if cullFolderReviewSnapshot?.libraryRootURL != root {
+            cullFolderReviewSnapshot = nil
+            previousCullFolderURL = nil
+            nextCullFolderURL = nil
+        }
+        cullFolderQueueError = nil
+        isRefreshingCullFolderQueue = true
+        cullFolderQueueGeneration += 1
+        let generation = cullFolderQueueGeneration
+        let model = self
+
+        cullFolderQueueTask = Task {
+            do {
+                let worker = Task.detached(priority: .utility) {
+                    try CullFolderNavigation.reviewSummaries(
+                        in: root,
+                        fileManager: FileManager()
                     ) {
-                        return neighbors
+                        try Task.checkCancellation()
                     }
                 }
-                return nil
-            }.value
-
-            guard !Task.isCancelled,
-                  let self,
-                  self.folderURL?.standardizedFileURL == standardizedCurrentFolder else {
-                return
+                let summaries = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                try Task.checkCancellation()
+                guard generation == model.cullFolderQueueGeneration else { return }
+                model.cullFolderReviewSnapshot = CullFolderReviewSnapshot(
+                    libraryRootURL: root,
+                    folders: summaries
+                )
+                model.cullFolderQueueError = nil
+                model.updateCullFolderNeighbors()
+            } catch is CancellationError {
+                // Foreground photo work or a newer refresh took priority.
+            } catch {
+                guard generation == model.cullFolderQueueGeneration else { return }
+                model.cullFolderQueueError = error.localizedDescription
             }
-            self.previousCullFolderURL = neighbors?.previous
-            self.nextCullFolderURL = neighbors?.next
-            self.folderNavigationTask = nil
+
+            guard generation == model.cullFolderQueueGeneration else { return }
+            model.isRefreshingCullFolderQueue = false
+            model.cullFolderQueueTask = nil
         }
+    }
+
+    private var activeCullFolderQueueRoot: URL? {
+        if let folderURL,
+           let inferredRoot = CullFolderNavigation.libraryRoot(containing: folderURL) {
+            return inferredRoot.standardizedFileURL
+        }
+        return library.configuredLibraryURL?.standardizedFileURL
+    }
+
+    private func prepareCullFolderQueueForActiveScan(in folderURL: URL) {
+        cancelCullFolderQueueRefresh()
+        let root = CullFolderNavigation.libraryRoot(containing: folderURL)?.standardizedFileURL
+            ?? library.configuredLibraryURL?.standardizedFileURL
+        if cullFolderReviewSnapshot?.libraryRootURL != root {
+            cullFolderReviewSnapshot = nil
+            cullFolderQueueError = nil
+        }
+        updateCullFolderNeighbors()
+    }
+
+    private func cancelCullFolderQueueRefresh() {
+        cullFolderQueueGeneration += 1
+        cullFolderQueueTask?.cancel()
+        cullFolderQueueTask = nil
+        isRefreshingCullFolderQueue = false
+    }
+
+    private func clearCullFolderQueue() {
+        cancelCullFolderQueueRefresh()
+        cullFolderReviewSnapshot = nil
+        cullFolderQueueError = nil
+        previousCullFolderURL = nil
+        nextCullFolderURL = nil
+    }
+
+    private func updateCullFolderNeighbors() {
+        guard let folderURL,
+              let snapshot = cullFolderReviewSnapshot else {
+            previousCullFolderURL = nil
+            nextCullFolderURL = nil
+            return
+        }
+        let neighbors = CullFolderNavigation.neighbors(
+            of: folderURL,
+            among: snapshot.folders.map(\.folderURL)
+        )
+        previousCullFolderURL = neighbors?.previous
+        nextCullFolderURL = neighbors?.next
+    }
+
+    private func updateCullFolderReviewSummary(from scan: CullFolderScan) {
+        guard var snapshot = cullFolderReviewSnapshot else { return }
+        let frames = scan.bursts.flatMap(\.frames) + scan.singleFrames
+        snapshot.replace(CullFolderReviewSummary(
+            folderURL: scan.folder.standardizedFileURL,
+            unreviewedCount: frames.count { $0.disposition == nil },
+            keptCount: frames.count { $0.disposition == .select },
+            rejectedCount: frames.count { $0.disposition == .reject }
+        ))
+        cullFolderReviewSnapshot = snapshot
+        updateCullFolderNeighbors()
+    }
+
+    private func updateCullFolderQueue(
+        after relocations: [CullFrameRelocation],
+        in folderURL: URL
+    ) {
+        guard var snapshot = cullFolderReviewSnapshot else { return }
+        snapshot.apply(relocations, in: folderURL)
+        cullFolderReviewSnapshot = snapshot
+        updateCullFolderNeighbors()
     }
 
     func syncSelectedFrame() {
@@ -3185,6 +3455,7 @@ final class CullViewModel {
                 self.rewriteFrameURLs(using: result.rawRelocations)
                 self.applyDispositionStates(changedStates, after: result.rawRelocations)
                 self.library.applyImageStatistics(after: result, in: folderURL)
+                self.updateCullFolderQueue(after: result.rawRelocations, in: folderURL)
                 if let nextFrameURL {
                     let destinationBySource = Dictionary(
                         uniqueKeysWithValues: result.rawRelocations.map { ($0.sourceURL, $0.destinationURL) }
