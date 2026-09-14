@@ -44,6 +44,125 @@ struct CullFolderNavigationTests {
         #expect(CullFolderNavigation.neighbors(of: next, in: root)?.next == nil)
     }
 
+    @Test func summarizesOnlyDirectCR3ReviewStateWithoutReadingSidecarsOrNestedFolders() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let day = dateFolder(root, "2026/09/13")
+        try createCR3(in: day, name: "IMG_0001.CR3")
+        try createCR3(in: day, name: "IMG_0002.cr3")
+        try createCR3(in: day.appendingPathComponent("Keeps", isDirectory: true), name: "IMG_0003.CR3")
+        try createCR3(in: day.appendingPathComponent("Rejects", isDirectory: true), name: "IMG_0004.CR3")
+        try createCR3(in: day.appendingPathComponent("Nested", isDirectory: true), name: "IGNORED.CR3")
+        try Data([0]).write(to: day.appendingPathComponent("IMG_0001.xmp"))
+
+        let summaries = try CullFolderNavigation.reviewSummaries(in: root)
+        let summary = try #require(summaries.first)
+
+        #expect(summaries.count == 1)
+        #expect(summary.folderURL == day.standardizedFileURL)
+        #expect(summary.dateLabel == "2026/09/13")
+        #expect(summary.unreviewedCount == 2)
+        #expect(summary.keptCount == 1)
+        #expect(summary.rejectedCount == 1)
+        #expect(summary.totalCount == 4)
+        #expect(!summary.isReviewed)
+    }
+
+    @Test func keepsReviewedFoldersInTheSnapshotButOutOfTheActiveQueue() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let incomplete = dateFolder(root, "2026/09/12")
+        let complete = dateFolder(root, "2026/09/13")
+        try createCR3(in: incomplete)
+        try createCR3(in: complete.appendingPathComponent("Keeps", isDirectory: true))
+
+        let snapshot = CullFolderReviewSnapshot(
+            libraryRootURL: root.standardizedFileURL,
+            folders: try CullFolderNavigation.reviewSummaries(in: root)
+        )
+
+        #expect(snapshot.foldersNeedingReview.map(\.folderURL) == [incomplete.standardizedFileURL])
+        #expect(snapshot.reviewedFolders.map(\.folderURL) == [complete.standardizedFileURL])
+    }
+
+    @Test func appliesSuccessfulRelocationsWithoutRescanningTheLibrary() {
+        let root = URL(fileURLWithPath: "/Volumes/Photos/Fotocopy", isDirectory: true)
+        let day = dateFolder(root, "2026/09/13").standardizedFileURL
+        let first = day.appendingPathComponent("IMG_0001.CR3")
+        let second = day.appendingPathComponent("IMG_0002.CR3")
+        var snapshot = CullFolderReviewSnapshot(
+            libraryRootURL: root.standardizedFileURL,
+            folders: [CullFolderReviewSummary(
+                folderURL: day,
+                unreviewedCount: 2,
+                keptCount: 0,
+                rejectedCount: 0
+            )]
+        )
+
+        snapshot.apply([
+            CullFrameRelocation(
+                sourceURL: first,
+                destinationURL: day.appendingPathComponent("Keeps/IMG_0001.CR3")
+            ),
+            CullFrameRelocation(
+                sourceURL: second,
+                destinationURL: day.appendingPathComponent("Rejects/IMG_0002.CR3")
+            )
+        ], in: day)
+
+        #expect(snapshot.foldersNeedingReview.isEmpty)
+        #expect(snapshot.reviewedFolders.first?.unreviewedCount == 0)
+        #expect(snapshot.reviewedFolders.first?.keptCount == 1)
+        #expect(snapshot.reviewedFolders.first?.rejectedCount == 1)
+
+        snapshot.apply([
+            CullFrameRelocation(
+                sourceURL: day.appendingPathComponent("Rejects/IMG_0002.CR3"),
+                destinationURL: second
+            )
+        ], in: day)
+
+        #expect(snapshot.foldersNeedingReview.first?.unreviewedCount == 1)
+        #expect(snapshot.foldersNeedingReview.first?.rejectedCount == 0)
+    }
+
+    @Test func removesTrashedRejectsFromOnlyTheirDateFolder() {
+        let root = URL(fileURLWithPath: "/Volumes/Photos/Fotocopy", isDirectory: true)
+        let first = dateFolder(root, "2026/09/12").standardizedFileURL
+        let second = dateFolder(root, "2026/09/13").standardizedFileURL
+        var snapshot = CullFolderReviewSnapshot(
+            libraryRootURL: root.standardizedFileURL,
+            folders: [
+                CullFolderReviewSummary(folderURL: first, unreviewedCount: 1, keptCount: 0, rejectedCount: 2),
+                CullFolderReviewSummary(folderURL: second, unreviewedCount: 0, keptCount: 1, rejectedCount: 1)
+            ]
+        )
+
+        snapshot.removeTrashedRejects([
+            first.appendingPathComponent("Rejects/IMG_0001.CR3"),
+            second.appendingPathComponent("Rejects/IMG_0002.CR3")
+        ])
+
+        #expect(snapshot.folders.first?.rejectedCount == 1)
+        #expect(snapshot.folders.last?.rejectedCount == 0)
+        #expect(snapshot.folders.last?.totalCount == 1)
+    }
+
+    @Test func cooperativelyCancelsBetweenDirectories() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try createCR3(in: dateFolder(root, "2026/09/13"))
+
+        #expect(throws: CancellationError.self) {
+            try CullFolderNavigation.reviewSummaries(in: root) {
+                throw CancellationError()
+            }
+        }
+    }
+
     @Test func ignoresInvalidEmptyAndSymlinkedFolders() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }

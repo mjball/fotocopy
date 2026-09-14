@@ -8,6 +8,135 @@ struct CullFolderNeighbors: Sendable {
     let next: URL?
 }
 
+/// A lightweight, filesystem-derived summary of one reviewable date folder.
+/// Counts come only from directory entries; building the folder queue never
+/// opens a RAW, reads capture metadata, or creates previews.
+struct CullFolderReviewSummary: Identifiable, Sendable, Equatable {
+    let folderURL: URL
+    var unreviewedCount: Int
+    var keptCount: Int
+    var rejectedCount: Int
+
+    var id: URL { folderURL }
+    var totalCount: Int { unreviewedCount + keptCount + rejectedCount }
+    var isReviewed: Bool { unreviewedCount == 0 }
+
+    var dateLabel: String {
+        let monthURL = folderURL.deletingLastPathComponent()
+        let year = monthURL.deletingLastPathComponent().lastPathComponent
+        return "\(year)/\(monthURL.lastPathComponent)/\(folderURL.lastPathComponent)"
+    }
+
+    func applying(_ relocations: [CullFrameRelocation]) -> CullFolderReviewSummary {
+        var updated = self
+        for relocation in relocations {
+            guard let sourceBucket = Self.bucket(for: relocation.sourceURL, in: folderURL),
+                  let destinationBucket = Self.bucket(for: relocation.destinationURL, in: folderURL),
+                  sourceBucket != destinationBucket,
+                  updated.count(for: sourceBucket) > 0 else {
+                continue
+            }
+            updated.adjust(sourceBucket, by: -1)
+            updated.adjust(destinationBucket, by: 1)
+        }
+        return updated
+    }
+
+    private enum Bucket {
+        case unreviewed
+        case kept
+        case rejected
+    }
+
+    private static func bucket(for fileURL: URL, in folderURL: URL) -> Bucket? {
+        let parent = fileURL.deletingLastPathComponent().standardizedFileURL
+        let folder = folderURL.standardizedFileURL
+        if parent == folder { return .unreviewed }
+        guard parent.deletingLastPathComponent().standardizedFileURL == folder else { return nil }
+        switch parent.lastPathComponent {
+        case CullDisposition.select.destinationFolderName: return .kept
+        case CullDisposition.reject.destinationFolderName: return .rejected
+        default: return nil
+        }
+    }
+
+    private func count(for bucket: Bucket) -> Int {
+        switch bucket {
+        case .unreviewed: return unreviewedCount
+        case .kept: return keptCount
+        case .rejected: return rejectedCount
+        }
+    }
+
+    private mutating func adjust(_ bucket: Bucket, by amount: Int) {
+        switch bucket {
+        case .unreviewed: unreviewedCount += amount
+        case .kept: keptCount += amount
+        case .rejected: rejectedCount += amount
+        }
+    }
+}
+
+struct CullFolderReviewSnapshot: Sendable, Equatable {
+    let libraryRootURL: URL
+    var folders: [CullFolderReviewSummary]
+
+    var foldersNeedingReview: [CullFolderReviewSummary] {
+        folders.reversed().filter { !$0.isReviewed }
+    }
+
+    var reviewedFolders: [CullFolderReviewSummary] {
+        folders.reversed().filter(\.isReviewed)
+    }
+
+    mutating func replace(_ summary: CullFolderReviewSummary) {
+        guard CullFolderNavigation.libraryRoot(containing: summary.folderURL) == libraryRootURL else { return }
+        if let index = folders.firstIndex(where: { $0.folderURL == summary.folderURL }) {
+            if summary.totalCount == 0 {
+                folders.remove(at: index)
+            } else {
+                folders[index] = summary
+            }
+        } else if summary.totalCount > 0 {
+            folders.append(summary)
+            folders.sort { $0.folderURL.path.localizedStandardCompare($1.folderURL.path) == .orderedAscending }
+        }
+    }
+
+    mutating func apply(_ relocations: [CullFrameRelocation], in folderURL: URL) {
+        guard let index = folders.firstIndex(where: { $0.folderURL == folderURL.standardizedFileURL }) else { return }
+        folders[index] = folders[index].applying(relocations)
+    }
+
+    mutating func removeTrashedRejects(_ rejectedURLs: [URL]) {
+        let countsByFolder = Dictionary(grouping: rejectedURLs.compactMap { rejectedURL -> URL? in
+            let rejectsFolder = rejectedURL.deletingLastPathComponent().standardizedFileURL
+            guard rejectsFolder.lastPathComponent == CullDisposition.reject.destinationFolderName else { return nil }
+            return rejectsFolder.deletingLastPathComponent().standardizedFileURL
+        }, by: { $0 }).mapValues(\.count)
+
+        for index in folders.indices.reversed() {
+            let removedCount = countsByFolder[folders[index].folderURL] ?? 0
+            guard removedCount > 0 else { continue }
+            folders[index].rejectedCount = max(0, folders[index].rejectedCount - removedCount)
+            if folders[index].totalCount == 0 {
+                folders.remove(at: index)
+            }
+        }
+    }
+}
+
+enum CullFolderNavigationError: LocalizedError {
+    case libraryUnavailable(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .libraryUnavailable(let url):
+            return "The Cull library at \(url.path) is unavailable."
+        }
+    }
+}
+
 /// Finds Fotocopy's local `YYYY/MM/DD` folders without looking at photo
 /// metadata. This keeps folder-to-folder navigation quick even on a slow
 /// external drive, while limiting it to the same folders Cull can actually
@@ -39,6 +168,13 @@ enum CullFolderNavigation {
         fileManager: FileManager = .default
     ) -> CullFolderNeighbors? {
         let folders = cullFolders(in: libraryRoot, fileManager: fileManager)
+        return neighbors(of: folder, among: folders)
+    }
+
+    static func neighbors(
+        of folder: URL,
+        among folders: [URL]
+    ) -> CullFolderNeighbors? {
         let current = folder.standardizedFileURL
         guard let index = folders.firstIndex(where: { $0.standardizedFileURL == current }) else {
             return nil
@@ -54,54 +190,66 @@ enum CullFolderNavigation {
         in libraryRoot: URL,
         fileManager: FileManager = .default
     ) -> [URL] {
-        let root = libraryRoot.standardizedFileURL
-        guard isSafeDirectory(root, fileManager: fileManager) else { return [] }
+        (try? reviewSummaries(in: libraryRoot, fileManager: fileManager).map(\.folderURL)) ?? []
+    }
 
-        var folders: [URL] = []
+    static func reviewSummaries(
+        in libraryRoot: URL,
+        fileManager: FileManager = .default,
+        cancellationCheck: () throws -> Void = {}
+    ) throws -> [CullFolderReviewSummary] {
+        let root = libraryRoot.standardizedFileURL
+        guard isSafeDirectory(root, fileManager: fileManager) else {
+            throw CullFolderNavigationError.libraryUnavailable(root)
+        }
+
+        var folders: [CullFolderReviewSummary] = []
         for yearURL in childDirectories(of: root, fileManager: fileManager) where isYear(yearURL.lastPathComponent) {
+            try cancellationCheck()
             for monthURL in childDirectories(of: yearURL, fileManager: fileManager) where isMonth(monthURL.lastPathComponent) {
+                try cancellationCheck()
                 for dayURL in childDirectories(of: monthURL, fileManager: fileManager) where isDay(
                     dayURL.lastPathComponent,
                     year: yearURL.lastPathComponent,
                     month: monthURL.lastPathComponent
                 ) {
-                    if containsReviewableCR3(in: dayURL, fileManager: fileManager) {
-                        folders.append(dayURL.standardizedFileURL)
-                    }
+                    try cancellationCheck()
+                    let unreviewedCount = directCR3Count(in: dayURL, fileManager: fileManager)
+                    let keptCount = directCR3Count(
+                        in: dayURL.appendingPathComponent(CullDisposition.select.destinationFolderName, isDirectory: true),
+                        fileManager: fileManager
+                    )
+                    let rejectedCount = directCR3Count(
+                        in: dayURL.appendingPathComponent(CullDisposition.reject.destinationFolderName, isDirectory: true),
+                        fileManager: fileManager
+                    )
+                    guard unreviewedCount + keptCount + rejectedCount > 0 else { continue }
+                    folders.append(CullFolderReviewSummary(
+                        folderURL: dayURL.standardizedFileURL,
+                        unreviewedCount: unreviewedCount,
+                        keptCount: keptCount,
+                        rejectedCount: rejectedCount
+                    ))
                 }
             }
         }
 
         return folders.sorted {
-            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+            $0.folderURL.path.localizedStandardCompare($1.folderURL.path) == .orderedAscending
         }
     }
 
-    private static func containsReviewableCR3(in folder: URL, fileManager: FileManager) -> Bool {
-        if containsDirectCR3(in: folder, fileManager: fileManager) {
-            return true
-        }
-
-        return CullDisposition.allCases.contains { disposition in
-            let decisionFolder = folder.appendingPathComponent(
-                disposition.destinationFolderName,
-                isDirectory: true
-            )
-            return containsDirectCR3(in: decisionFolder, fileManager: fileManager)
-        }
-    }
-
-    private static func containsDirectCR3(in directory: URL, fileManager: FileManager) -> Bool {
+    private static func directCR3Count(in directory: URL, fileManager: FileManager) -> Int {
         guard isSafeDirectory(directory, fileManager: fileManager),
               let children = try? fileManager.contentsOfDirectory(
                   at: directory,
                   includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
                   options: [.skipsHiddenFiles]
               ) else {
-            return false
+            return 0
         }
 
-        return children.contains { url in
+        return children.count { url in
             guard url.pathExtension.caseInsensitiveCompare("cr3") == .orderedSame,
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
                 return false
