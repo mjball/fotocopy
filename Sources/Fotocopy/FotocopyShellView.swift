@@ -64,43 +64,23 @@ struct FotocopyShellView: View {
         .navigationTitle(workspace.windowTitle)
         .toolbar {
             if workspace == .cullBursts {
-                ToolbarItem(placement: .primaryAction) {
-                    HStack(spacing: 10) {
-                        if cullModel.folderURL != nil {
-                            CullReviewLayoutToolbarControl(layout: $cullReviewLayout)
-                            CullFolderNavigationToolbarControl(model: cullModel)
-                        }
-
-                        if cullModel.folderURL != nil, driveTemperatureMonitor.primaryReading != nil {
-                            Divider()
-                                .frame(height: 22)
-                        }
-
-                        ExternalDriveTemperatureToolbarStatus(monitor: driveTemperatureMonitor)
-
-                        if cullModel.isScanning {
-                            Button {
-                                cullModel.cancel()
-                            } label: {
-                                Label("Cancel", systemImage: "xmark")
-                            }
-                            .labelStyle(.titleAndIcon)
-                            .controlSize(.small)
-                            .buttonStyle(.bordered)
-                            .help("Cancel the current photo scan")
-                        } else if cullModel.folderURL != nil {
-                            Button {
-                                cullModel.scan()
-                            } label: {
-                                Label("Rescan", systemImage: "arrow.clockwise")
-                            }
-                            .labelStyle(.titleAndIcon)
-                            .controlSize(.small)
-                            .buttonStyle(.bordered)
-                            .disabled(cullModel.isMoving)
-                            .help("Scan this folder again for bursts and single frames, then refresh the whole-library summary")
-                        }
+                if cullModel.folderURL != nil {
+                    if #available(macOS 26.0, *) {
+                        CullPrimaryToolbarContent(
+                            layout: $cullReviewLayout,
+                            model: cullModel
+                        )
+                        .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        CullPrimaryToolbarContent(
+                            layout: $cullReviewLayout,
+                            model: cullModel
+                        )
                     }
+                }
+
+                ToolbarItem(placement: .primaryAction) {
+                    ExternalDriveTemperatureToolbarStatus(monitor: driveTemperatureMonitor)
                 }
             } else {
                 ToolbarItem(placement: .primaryAction) {
@@ -240,87 +220,175 @@ struct FotocopyShellView: View {
     }
 }
 
-/// These compact controls stay next to the review layout because both change
-/// what the culler is looking at. Their full names and shortcuts remain
-/// available from the Cull menu and in the help text.
-private struct CullFolderNavigationToolbarControl: View {
-    @Bindable var model: CullViewModel
+private enum CullFolderNavigationDirection {
+    case previous
+    case next
 
-    var body: some View {
-        HStack(spacing: 0) {
-            Button {
-                model.moveCullFolder(by: -1)
-            } label: {
-                Image(systemName: "chevron.backward")
-            }
-            .accessibilityLabel("Previous Cull Folder")
-            .help("Previous Cull Folder (⌘[)")
-            .disabled(!model.canNavigatePreviousCullFolder)
-
-            Button {
-                model.moveCullFolder(by: 1)
-            } label: {
-                Image(systemName: "chevron.forward")
-            }
-            .accessibilityLabel("Next Cull Folder")
-            .help("Next Cull Folder (⌘])")
-            .disabled(!model.canNavigateNextCullFolder)
+    var symbolName: String {
+        switch self {
+        case .previous: "chevron.backward"
+        case .next: "chevron.forward"
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .accessibilityElement(children: .contain)
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .previous: "Previous Cull Folder"
+        case .next: "Next Cull Folder"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .previous: "Previous Cull Folder (⌘[)"
+        case .next: "Next Cull Folder (⌘])"
+        }
     }
 }
 
-/// A fixed-width control keeps Full, Compact, and Minimal visually balanced
-/// in the toolbar. The native segmented picker widened and redistributed its
-/// labels depending on toolbar space, which made the review controls feel
-/// unstable beside the drive status.
-private struct CullReviewLayoutToolbarControl: View {
+/// These are separate items for customization and accessibility, but macOS 26
+/// is explicitly told not to paint its shared glass/background behind them.
+private struct CullPrimaryToolbarContent: ToolbarContent {
     @Binding var layout: CullReviewLayout
+    @Bindable var model: CullViewModel
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            CullReviewLayoutToolbarButton(layout: $layout, candidate: .browse)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            CullReviewLayoutToolbarButton(layout: $layout, candidate: .review)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            CullReviewLayoutToolbarButton(layout: $layout, candidate: .focus)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            CullFolderNavigationToolbarButton(model: model, direction: .previous)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            CullFolderNavigationToolbarButton(model: model, direction: .next)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            CullScanToolbarControl(model: model)
+        }
+    }
+}
+
+private struct CullScanToolbarControl: View {
+    @Bindable var model: CullViewModel
 
     var body: some View {
-        HStack(spacing: 7) {
-            Text("View")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 0) {
-                ForEach(Array(CullReviewLayout.allCases.enumerated()), id: \.element.id) { index, candidate in
-                    Button {
-                        layout = candidate
-                    } label: {
-                        Text(candidate.title)
-                            .font(.caption.weight(candidate == layout ? .semibold : .regular))
-                            .frame(width: 64, height: 28)
-                            .contentShape(Rectangle())
-                            .background {
-                                if candidate == layout {
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(.tertiary)
-                                        .padding(2)
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(candidate.title) review layout")
-                    .accessibilityAddTraits(candidate == layout ? .isSelected : [])
-
-                    if index < CullReviewLayout.allCases.count - 1 {
-                        Rectangle()
-                            .fill(.separator.opacity(0.6))
-                            .frame(width: 1, height: 16)
-                    }
-                }
+        if model.isScanning {
+            Button {
+                model.cancel()
+            } label: {
+                Label("Cancel", systemImage: "xmark")
             }
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .buttonStyle(CullToolbarActionButtonStyle())
+            .help("Cancel the current photo scan")
+        } else {
+            Button {
+                model.scan()
+            } label: {
+                Label("Rescan", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(CullToolbarActionButtonStyle())
+            .disabled(model.isMoving)
+            .help("Scan this folder again for bursts and single frames, then refresh the whole-library summary")
+        }
+    }
+}
+
+/// Independent native toolbar items keep macOS from adding a group bezel around
+/// the pair of arrows. Their names and shortcuts remain available in help.
+private struct CullFolderNavigationToolbarButton: View {
+    @Bindable var model: CullViewModel
+    let direction: CullFolderNavigationDirection
+
+    var body: some View {
+        Button {
+            model.moveCullFolder(by: direction == .previous ? -1 : 1)
+        } label: {
+            Image(systemName: direction.symbolName)
+        }
+        .buttonStyle(CullToolbarIconButtonStyle())
+        .accessibilityLabel(direction.accessibilityLabel)
+        .help(direction.help)
+        .disabled(direction == .previous ? !model.canNavigatePreviousCullFolder : !model.canNavigateNextCullFolder)
+    }
+}
+
+/// The picker uses individual items rather than a custom grouped view so the
+/// system doesn't surround it with a second, much larger rounded bezel.
+private struct CullReviewLayoutToolbarButton: View {
+    @Binding var layout: CullReviewLayout
+    let candidate: CullReviewLayout
+
+    var body: some View {
+        Button {
+            layout = candidate
+        } label: {
+            Text(candidate.title)
+                .font(.caption.weight(candidate == layout ? .semibold : .regular))
+                .frame(width: 64, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(CullToolbarTextButtonStyle(isSelected: candidate == layout))
+        .accessibilityLabel("\(candidate.title) review layout")
+        .accessibilityAddTraits(candidate == layout ? .isSelected : [])
+        .help("Choose how much surrounding UI is shown while reviewing bursts")
+    }
+}
+
+private enum CullToolbarControlMetrics {
+    static let cornerRadius: CGFloat = 8
+}
+
+private struct CullToolbarTextButtonStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous)
+                    .fill(isSelected || configuration.isPressed ? .tertiary : .quaternary)
+            }
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous)
                     .stroke(.separator.opacity(0.55), lineWidth: 1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .help("Choose how much surrounding UI is shown while reviewing bursts")
-        }
+    }
+}
+
+private struct CullToolbarIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: 28, height: 28)
+            .contentShape(RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous))
+            .background {
+                if configuration.isPressed {
+                    RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous)
+                        .fill(.tertiary)
+                }
+            }
+    }
+}
+
+private struct CullToolbarActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .contentShape(RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous)
+                    .fill(configuration.isPressed ? .tertiary : .quaternary)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: CullToolbarControlMetrics.cornerRadius, style: .continuous)
+                    .stroke(.separator.opacity(0.55), lineWidth: 1)
+            }
     }
 }
 

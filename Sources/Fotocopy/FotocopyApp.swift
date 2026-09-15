@@ -23,6 +23,9 @@ struct FotocopyApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 980, height: 700)
+        // Keeps native title-bar behavior while opting into Tahoe's tighter
+        // compact-toolbar window geometry.
+        .windowToolbarStyle(.unifiedCompact)
 
         Settings {
             FotocopySettingsView()
