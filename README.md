@@ -41,6 +41,7 @@ Your photos stay portable: browse them in Finder, edit them in the tools you alr
 ### Native macOS workflow
 
 - Keeps files visible and usable in Finder and other photo software at every stage.
+- Uses a compact native toolbar window and a single, 8 pt rounded-rectangle treatment for Cull’s review controls, avoiding nested toolbar containers and mismatched control radii.
 - Shows a quiet, live toolbar temperature readout for connected external SSDs, using macOS-provided SMART data without a password prompt.
 - Includes a standard menu bar with discoverable commands and shortcuts, persistent cull preferences, and built-in update checks.
 
