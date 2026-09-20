@@ -234,6 +234,7 @@ private struct SingleFrameFilterPicker: View {
 struct CullSidebarSections: View {
     @Bindable var model: CullViewModel
     @State private var showsReviewedFolders = false
+    @State private var showsAllReviewFolders = false
 
     var body: some View {
         Section("Cull") {
@@ -346,8 +347,31 @@ struct CullSidebarSections: View {
                     .font(.caption)
                     .foregroundStyle(.green)
             } else {
-                ForEach(model.cullFoldersNeedingReview) { summary in
-                    folderQueueRow(summary, isReviewed: false)
+                ForEach(model.recommendedCullFolders) { recommendation in
+                    folderQueueRow(
+                        recommendation.summary,
+                        isReviewed: false,
+                        recommendationReason: recommendation.reason
+                    )
+                }
+
+                if showsAllReviewFolders {
+                    ForEach(model.remainingCullFolders) { summary in
+                        folderQueueRow(summary, isReviewed: false)
+                    }
+                    if !model.remainingCullFolders.isEmpty {
+                        Button("Show top 10") {
+                            showsAllReviewFolders = false
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                    }
+                } else if !model.remainingCullFolders.isEmpty {
+                    Button("Show \(model.remainingCullFolders.count) more…") {
+                        showsAllReviewFolders = true
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
                 }
             }
 
@@ -391,11 +415,16 @@ struct CullSidebarSections: View {
                 }
             }
         }
+        .onChange(of: model.cullFolderReviewSnapshot?.libraryRootURL) {
+            showsAllReviewFolders = false
+            showsReviewedFolders = false
+        }
     }
 
     private func folderQueueRow(
         _ summary: CullFolderReviewSummary,
-        isReviewed: Bool
+        isReviewed: Bool,
+        recommendationReason: CullFolderRecommendationReason? = nil
     ) -> some View {
         let isCurrent = summary.folderURL == model.folderURL?.standardizedFileURL
         return Button {
@@ -410,7 +439,11 @@ struct CullSidebarSections: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summary.dateLabel)
                         .lineLimit(1)
-                    Text(folderQueueDetail(summary, isReviewed: isReviewed))
+                    Text(folderQueueDetail(
+                        summary,
+                        isReviewed: isReviewed,
+                        recommendationReason: recommendationReason
+                    ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -437,10 +470,33 @@ struct CullSidebarSections: View {
 
     private func folderQueueDetail(
         _ summary: CullFolderReviewSummary,
-        isReviewed: Bool
+        isReviewed: Bool,
+        recommendationReason: CullFolderRecommendationReason? = nil
     ) -> String {
         if isReviewed {
             return "\(summary.totalCount) reviewed"
+        }
+        if let recommendationReason {
+            switch recommendationReason {
+            case .current:
+                return "Current · \(summary.unreviewedCount) unreviewed"
+            case .largeOpportunity:
+                return "Large opportunity · \(summary.unreviewedCount) unreviewed"
+            case .closeToDone:
+                return "Close to done · \(summary.unreviewedCount) unreviewed"
+            case .aging:
+                return "Aging · \(summary.unreviewedCount) unreviewed"
+            case .resume:
+                let reviewedCount = summary.totalCount - summary.unreviewedCount
+                let completion = summary.totalCount > 0
+                    ? Int((Double(reviewedCount) / Double(summary.totalCount) * 100).rounded())
+                    : 0
+                return "Resume · \(completion)% reviewed"
+            case .largestBacklog:
+                return "Largest backlog · \(summary.unreviewedCount) unreviewed"
+            case .newest:
+                return "Newest · \(summary.unreviewedCount) unreviewed"
+            }
         }
         return "\(summary.unreviewedCount) unreviewed · \(summary.totalCount) total"
     }
@@ -2452,6 +2508,7 @@ final class CullViewModel {
     private(set) var previousCullFolderURL: URL?
     private(set) var nextCullFolderURL: URL?
     private(set) var cullFolderReviewSnapshot: CullFolderReviewSnapshot?
+    private(set) var cullFolderRecommendationSet = CullFolderRecommendationSet.empty
     private(set) var isRefreshingCullFolderQueue = false
     private(set) var cullFolderQueueError: String?
     var selectedFrameURL: URL?
@@ -2476,19 +2533,30 @@ final class CullViewModel {
     private var cullRefreshNoticeTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
     private let quickExportNotifier: any QuickExportNotifying
+    private let preferences: UserDefaults
+    private var cullFolderLastOpenedAt: [String: TimeInterval]
 
-    init(quickExportNotifier: any QuickExportNotifying = SystemQuickExportNotifier()) {
+    init(
+        quickExportNotifier: any QuickExportNotifying = SystemQuickExportNotifier(),
+        preferences: UserDefaults = .standard
+    ) {
         self.quickExportNotifier = quickExportNotifier
+        self.preferences = preferences
+        self.cullFolderLastOpenedAt = (preferences.dictionary(
+            forKey: PreferenceKeys.cullFolderLastOpenedAt
+        ) ?? [:]).compactMapValues { value in
+            (value as? NSNumber)?.doubleValue
+        }
         library.onRejectedPhotosTrashed = { [weak self] result in
             self?.refreshAfterTrashingRejects(result)
         }
-        if let path = UserDefaults.standard.string(forKey: PreferenceKeys.lastCullFolder) {
+        if let path = preferences.string(forKey: PreferenceKeys.lastCullFolder) {
             folderURL = URL(fileURLWithPath: path)
         }
     }
 
     var recentImportedFolders: [URL] {
-        let paths = UserDefaults.standard.stringArray(forKey: PreferenceKeys.recentCullFolders) ?? []
+        let paths = preferences.stringArray(forKey: PreferenceKeys.recentCullFolders) ?? []
         return paths
             .map { URL(fileURLWithPath: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -2504,6 +2572,22 @@ final class CullViewModel {
 
     var reviewedCullFolders: [CullFolderReviewSummary] {
         cullFolderReviewSnapshot?.reviewedFolders ?? []
+    }
+
+    var recommendedCullFolders: [CullFolderRecommendationRow] {
+        guard let snapshot = cullFolderReviewSnapshot else { return [] }
+        let summariesByURL = Dictionary(uniqueKeysWithValues: snapshot.folders.map { ($0.folderURL, $0) })
+        return cullFolderRecommendationSet.recommended.compactMap { recommendation in
+            summariesByURL[recommendation.folderURL].map {
+                CullFolderRecommendationRow(summary: $0, reason: recommendation.reason)
+            }
+        }
+    }
+
+    var remainingCullFolders: [CullFolderReviewSummary] {
+        guard let snapshot = cullFolderReviewSnapshot else { return [] }
+        let summariesByURL = Dictionary(uniqueKeysWithValues: snapshot.folders.map { ($0.folderURL, $0) })
+        return cullFolderRecommendationSet.remainingFolderURLs.compactMap { summariesByURL[$0] }
     }
 
     var selectedReviewGroupID: CullReviewGroupID? {
@@ -2687,7 +2771,9 @@ final class CullViewModel {
         selectingLastFrame: Bool = false
     ) {
         folderURL = folder
-        UserDefaults.standard.set(folder.path, forKey: PreferenceKeys.lastCullFolder)
+        recordCullFolderActivity(folder)
+        preferences.set(folder.path, forKey: PreferenceKeys.lastCullFolder)
+        rebuildCullFolderRecommendations()
         startScan(
             preferring: reviewGroupID,
             selectingLastReviewGroup: selectingLastReviewGroup,
@@ -2707,7 +2793,9 @@ final class CullViewModel {
     /// fresh, disk-based scan when Cull first appears instead of persisting a
     /// transient burst list.
     func resumeLastScanIfNeeded() {
-        guard folderURL != nil, scanResult == nil, !isScanning, !isMoving else { return }
+        guard let folderURL, scanResult == nil, !isScanning, !isMoving else { return }
+        recordCullFolderActivity(folderURL)
+        rebuildCullFolderRecommendations()
         startScan(preferring: selectedReviewGroupID)
     }
 
@@ -2925,6 +3013,7 @@ final class CullViewModel {
                     folders: summaries
                 )
                 model.cullFolderQueueError = nil
+                model.rebuildCullFolderRecommendations()
                 model.updateCullFolderNeighbors()
             } catch is CancellationError {
                 // Foreground photo work or a newer refresh took priority.
@@ -2954,6 +3043,7 @@ final class CullViewModel {
         if cullFolderReviewSnapshot?.libraryRootURL != root {
             cullFolderReviewSnapshot = nil
             cullFolderQueueError = nil
+            cullFolderRecommendationSet = .empty
         }
         updateCullFolderNeighbors()
     }
@@ -2968,6 +3058,7 @@ final class CullViewModel {
     private func clearCullFolderQueue() {
         cancelCullFolderQueueRefresh()
         cullFolderReviewSnapshot = nil
+        cullFolderRecommendationSet = .empty
         cullFolderQueueError = nil
         previousCullFolderURL = nil
         nextCullFolderURL = nil
@@ -2998,6 +3089,7 @@ final class CullViewModel {
             rejectedCount: frames.count { $0.disposition == .reject }
         ))
         cullFolderReviewSnapshot = snapshot
+        rebuildCullFolderRecommendations()
         updateCullFolderNeighbors()
     }
 
@@ -3006,9 +3098,39 @@ final class CullViewModel {
         in folderURL: URL
     ) {
         guard var snapshot = cullFolderReviewSnapshot else { return }
+        let wasReviewed = snapshot.folders.first {
+            $0.folderURL == folderURL.standardizedFileURL
+        }?.isReviewed
         snapshot.apply(relocations, in: folderURL)
         cullFolderReviewSnapshot = snapshot
+        let isReviewed = snapshot.folders.first {
+            $0.folderURL == folderURL.standardizedFileURL
+        }?.isReviewed
+        if wasReviewed != isReviewed {
+            rebuildCullFolderRecommendations()
+        }
         updateCullFolderNeighbors()
+    }
+
+    private func rebuildCullFolderRecommendations() {
+        cullFolderRecommendationSet = CullFolderRecommendationEngine.recommendations(
+            from: cullFolderReviewSnapshot?.folders ?? [],
+            currentFolderURL: folderURL,
+            lastOpenedAt: cullFolderLastOpenedAt
+        )
+    }
+
+    private func recordCullFolderActivity(_ folderURL: URL) {
+        cullFolderLastOpenedAt[folderURL.standardizedFileURL.path] = Date().timeIntervalSince1970
+        if cullFolderLastOpenedAt.count > 100 {
+            cullFolderLastOpenedAt = Dictionary(
+                uniqueKeysWithValues: cullFolderLastOpenedAt
+                    .sorted { $0.value > $1.value }
+                    .prefix(100)
+                    .map { ($0.key, $0.value) }
+            )
+        }
+        preferences.set(cullFolderLastOpenedAt, forKey: PreferenceKeys.cullFolderLastOpenedAt)
     }
 
     func syncSelectedFrame() {
