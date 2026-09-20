@@ -1857,7 +1857,8 @@ private struct CullInspectionPreviewView: View {
                                 y: Double((value.location.y - imageRect.minY) / imageRect.height)
                             )
                         )
-                    }
+                    },
+                including: isPickingInspectionPoint ? .all : .none
             )
             .simultaneousGesture(panGesture(in: geometry.size, imageSize: zoomedSize))
             .simultaneousGesture(magnificationGesture(baseRect: baseRect, containerSize: geometry.size))
