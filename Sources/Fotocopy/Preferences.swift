@@ -18,6 +18,7 @@ enum PreferenceKeys {
     static let excludedCameraModels = "excludedCameraModels"
     static let recentCullFolders = "recentCullFolders"
     static let lastCullFolder = "lastCullFolder"
+    static let cullFolderLastOpenedAt = "cullFolderLastOpenedAt"
     static let cullScanWorkerCount = "cullScanWorkerCount"
     static let cullPreviewHeight = "cullPreviewHeight"
     static let cullShowsAFTarget = "cullShowsAFTarget"
