@@ -2,6 +2,10 @@
 
 ## Pull requests and documentation
 
+- Every completed repository modification goes through a `codex/` branch,
+  commit, push, pull request, self-review, and clean merge. Declining release
+  publication or app installation does not change this requirement. Never
+  leave requested changes only in the local working tree.
 - Keep the pull request title and description current after each meaningful
   scope or implementation change. Before merging, verify that it describes the
   complete result, its user-facing or engineering rationale, and verification.
