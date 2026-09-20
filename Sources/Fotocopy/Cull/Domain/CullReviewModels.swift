@@ -408,8 +408,9 @@ enum CullReviewGroupNavigation {
     }
 }
 
-/// Burst batch decisions advance within bursts only; review-group navigation
-/// is intentionally broader and can also move to the Singles group.
+/// Burst navigation itself stays within bursts. The review model may continue
+/// from the terminal burst into pending single frames after a completed
+/// decision action.
 enum CullBurstNavigation {
     static func burstID(
         in bursts: [PhotoBurst],
