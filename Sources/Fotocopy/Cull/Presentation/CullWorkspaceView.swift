@@ -3023,12 +3023,20 @@ final class CullViewModel {
         }
     }
 
-    func selectReviewGroup(withID groupID: CullReviewGroupID, selectingLastFrame: Bool = false) {
+    func selectReviewGroup(
+        withID groupID: CullReviewGroupID,
+        selectingLastFrame: Bool = false,
+        selectingFrameURL preferredFrameURL: URL? = nil
+    ) {
         guard let group = scanResult?.reviewGroups.first(where: { $0.id == groupID }) else { return }
+        let frames = visibleFrames(in: group)
         destination = .review(group.id)
-        selectedFrameURL = selectingLastFrame
-            ? visibleFrames(in: group).last?.url
-            : visibleFrames(in: group).first?.url
+        if let preferredFrameURL,
+           frames.contains(where: { $0.url == preferredFrameURL }) {
+            selectedFrameURL = preferredFrameURL
+        } else {
+            selectedFrameURL = selectingLastFrame ? frames.last?.url : frames.first?.url
+        }
         quickExportSelection.reset(to: selectedFrameURL)
         inspectionSource = nil
         isPickingInspectionPoint = false
@@ -3328,10 +3336,12 @@ final class CullViewModel {
 
         let selectedURLs = Set(frames.map(\.url))
         let advancingURL = selectedFrameURL.flatMap { selectedURLs.contains($0) ? $0 : nil } ?? frames.last?.url
+        let completingBurstID = isReviewingSingles ? nil : selectedBurst?.id
         moveDispositions(
             frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: disposition) },
             advanceAfterMoving: isReviewingSingles ? nil : advancingURL,
-            advanceAfterMovingSingleFrame: isReviewingSingles ? advancingURL : nil
+            advanceAfterMovingSingleFrame: isReviewingSingles ? advancingURL : nil,
+            advanceToSinglesAfterCompletingBurst: completingBurstID
         )
     }
 
@@ -3347,21 +3357,24 @@ final class CullViewModel {
                     disposition: $0.url == selectedFrameURL ? .select : .reject
                 )
             },
-            advanceAfterMovingBurst: burst.id
+            advanceAfterMovingBurst: burst.id,
+            advanceToSinglesAfterCompletingBurst: burst.id
         )
     }
 
     func markAllKeeping(in burst: PhotoBurst) {
         moveDispositions(
             burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .select) },
-            advanceAfterMovingBurst: burst.id
+            advanceAfterMovingBurst: burst.id,
+            advanceToSinglesAfterCompletingBurst: burst.id
         )
     }
 
     func markAllRejecting(in burst: PhotoBurst) {
         moveDispositions(
             burst.frames.map { CullFrameDispositionState(frameURL: $0.url, disposition: .reject) },
-            advanceAfterMovingBurst: burst.id
+            advanceAfterMovingBurst: burst.id,
+            advanceToSinglesAfterCompletingBurst: burst.id
         )
     }
 
@@ -3394,10 +3407,15 @@ final class CullViewModel {
         recordsUndo: Bool = true,
         advanceAfterMoving frameURL: URL? = nil,
         advanceAfterMovingSingleFrame singleFrameURL: URL? = nil,
-        advanceAfterMovingBurst burstID: URL? = nil
+        advanceAfterMovingBurst burstID: URL? = nil,
+        advanceToSinglesAfterCompletingBurst completingBurstID: URL? = nil
     ) {
         guard let folderURL, !isMoving else { return }
 
+        let pendingSingleFrameURL = pendingSingleFrameURL(
+            afterCompleting: completingBurstID,
+            applying: requestedStates
+        )
         let changedStates = requestedStates.filter {
             dispositions[$0.frameURL] != $0.disposition
         }
@@ -3410,6 +3428,9 @@ final class CullViewModel {
             }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectReviewGroup(withID: .burst(nextBurstID))
+            }
+            if let pendingSingleFrameURL {
+                continueReviewingSingleFrames(at: pendingSingleFrameURL)
             }
             return
         }
@@ -3433,6 +3454,9 @@ final class CullViewModel {
             }
             if let burstID, let nextBurstID = nextBurstID(after: burstID) {
                 selectReviewGroup(withID: .burst(nextBurstID))
+            }
+            if let pendingSingleFrameURL {
+                continueReviewingSingleFrames(at: pendingSingleFrameURL)
             }
             return
         }
@@ -3474,6 +3498,9 @@ final class CullViewModel {
                 }
                 if let nextBurstID {
                     self.selectReviewGroup(withID: .burst(nextBurstID))
+                }
+                if let pendingSingleFrameURL {
+                    self.continueReviewingSingleFrames(at: pendingSingleFrameURL)
                 }
                 self.isMoving = false
                 self.movingFrameCount = 0
@@ -3579,6 +3606,47 @@ final class CullViewModel {
             offset: 1
         )
         return candidate == burstID ? nil : candidate
+    }
+
+    /// Completing the final burst continues the folder's review sequence only
+    /// when a standalone photo still needs a decision. The projected states
+    /// make multi-image and burst-wide actions follow the same rule.
+    private func pendingSingleFrameURL(
+        afterCompleting burstID: URL?,
+        applying requestedStates: [CullFrameDispositionState]
+    ) -> URL? {
+        guard let burstID,
+              let scan = scanResult,
+              let lastBurst = scan.bursts.last,
+              lastBurst.id == burstID else {
+            return nil
+        }
+
+        let requestedStateByURL = Dictionary(
+            uniqueKeysWithValues: requestedStates.map { ($0.frameURL, $0) }
+        )
+        let burstWillBeComplete = lastBurst.frames.allSatisfy { frame in
+            if let requestedState = requestedStateByURL[frame.url] {
+                return requestedState.disposition != nil
+            }
+            return dispositions[frame.url] != nil
+        }
+        guard burstWillBeComplete else { return nil }
+
+        return scan.singleFrames.first { frame in
+            if let requestedState = requestedStateByURL[frame.url] {
+                return requestedState.disposition == nil
+            }
+            return dispositions[frame.url] == nil
+        }?.url
+    }
+
+    private func continueReviewingSingleFrames(at frameURL: URL) {
+        guard dispositions[frameURL] == nil else { return }
+        if !singleFrameFilter.includes(nil) {
+            singleFrameFilter = .undecided
+        }
+        selectReviewGroup(withID: .singleFrames, selectingFrameURL: frameURL)
     }
 
     private func destinationURL(
