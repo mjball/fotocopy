@@ -109,36 +109,42 @@ struct FotocopyShellView: View {
     }
 
     private var workspaceSidebar: some View {
-        ScrollViewReader { proxy in
-            List(selection: $sidebarSelection) {
-                Section("Tasks") {
-                    TaskSidebarRow(
-                        task: .importPhotos,
-                        isActive: workspace == .importPhotos,
-                        action: activateImport
-                    )
-                    TaskSidebarRow(
-                        task: .cullBursts,
-                        isActive: workspace == .cullBursts,
-                        action: activateCull
-                    )
-                    TaskSidebarRow(
-                        task: .organize,
-                        isActive: workspace == .organize,
-                        action: activateOrganize
-                    )
-                }
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                List(selection: $sidebarSelection) {
+                    Section("Tasks") {
+                        TaskSidebarRow(
+                            task: .importPhotos,
+                            isActive: workspace == .importPhotos,
+                            action: activateImport
+                        )
+                        TaskSidebarRow(
+                            task: .cullBursts,
+                            isActive: workspace == .cullBursts,
+                            action: activateCull
+                        )
+                        TaskSidebarRow(
+                            task: .organize,
+                            isActive: workspace == .organize,
+                            action: activateOrganize
+                        )
+                    }
 
-                if workspace == .cullBursts {
-                    CullSidebarSections(model: cullModel)
+                    if workspace == .cullBursts {
+                        CullSidebarSections(model: cullModel)
+                    }
+                }
+                .listStyle(.sidebar)
+                .task(id: cullModel.selectedReviewGroupID) {
+                    await scrollSelectedReviewGroupIntoView(cullModel.selectedReviewGroupID, using: proxy)
                 }
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 210, ideal: 255, max: 340)
-            .task(id: cullModel.selectedReviewGroupID) {
-                await scrollSelectedReviewGroupIntoView(cullModel.selectedReviewGroupID, using: proxy)
+
+            if workspace == .cullBursts, cullModel.folderURL != nil {
+                CullSidebarRevealFooter(model: cullModel)
             }
         }
+        .navigationSplitViewColumnWidth(min: 210, ideal: 255, max: 340)
     }
 
     @ViewBuilder
@@ -217,6 +223,30 @@ struct FotocopyShellView: View {
         guard workspace != .importPhotos else { return }
         workspace = .importPhotos
         sidebarSelection = nil
+    }
+}
+
+/// Keep this action outside the virtualized List so an animated selection
+/// scroll cannot recycle its hovered row and strand AppKit's help window.
+private struct CullSidebarRevealFooter: View {
+    @Bindable var model: CullViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button {
+                model.revealFolder()
+            } label: {
+                Label("Reveal Folder in Finder", systemImage: "folder")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal Cull folder in Finder")
+        }
+        .background(.regularMaterial)
     }
 }
 

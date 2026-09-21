@@ -318,12 +318,6 @@ struct CullSidebarSections: View {
                 }
             }
         }
-
-        if model.folderURL != nil {
-            Section {
-                Button("Reveal Folder in Finder") { model.revealFolder() }
-            }
-        }
     }
 
     private var folderReviewQueue: some View {
