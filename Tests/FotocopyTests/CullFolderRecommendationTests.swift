@@ -91,6 +91,41 @@ struct CullFolderRecommendationTests {
         #expect(forward == reversed)
     }
 
+    @Test func exactMetricsReplaceCountOnlyFallbackSlots() {
+        let summaries = (1...20).map { index in
+            summary(
+                day: index,
+                unreviewed: index,
+                kept: index.isMultiple(of: 3) ? index : 0
+            )
+        }
+        let metrics = Dictionary(uniqueKeysWithValues: summaries.map { summary in
+            (
+                summary.folderURL,
+                CullFolderReviewMetrics(
+                    inventorySignature: summary.inventorySignature,
+                    unfinishedBurstCount: 1,
+                    unfinishedBurstFrameCount: summary.unreviewedCount,
+                    unreviewedBurstFrameCount: summary.unreviewedCount,
+                    unreviewedSingleFrameCount: 0,
+                    calculatedAt: 1
+                )
+            )
+        })
+
+        let result = CullFolderRecommendationEngine.recommendations(
+            from: summaries,
+            currentFolderURL: nil,
+            lastOpenedAt: [:],
+            metricsByFolderURL: metrics
+        )
+
+        #expect(result.recommended.count { $0.reason == .highPayoff } == 3)
+        #expect(result.recommended.count { $0.reason == .quickWin } == 2)
+        #expect(result.recommended.count { $0.reason == .largeOpportunity } == 0)
+        #expect(result.recommended.count { $0.reason == .closeToDone } == 0)
+    }
+
     private func summary(
         day: Int,
         unreviewed: Int,

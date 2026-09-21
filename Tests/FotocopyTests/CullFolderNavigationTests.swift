@@ -67,6 +67,26 @@ struct CullFolderNavigationTests {
         #expect(summary.rejectedCount == 1)
         #expect(summary.totalCount == 4)
         #expect(!summary.isReviewed)
+        #expect(!summary.inventorySignature.isEmpty)
+    }
+
+    @Test func inventorySignatureChangesWhenFinderChangesADecisionBucket() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let day = dateFolder(root, "2026/09/14")
+        try createCR3(in: day)
+        let original = try #require(CullFolderNavigation.reviewSummaries(in: root).first)
+
+        let keeps = day.appendingPathComponent("Keeps", isDirectory: true)
+        try FileManager.default.createDirectory(at: keeps, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: day.appendingPathComponent("IMG_0001.CR3"),
+            to: keeps.appendingPathComponent("IMG_0001.CR3")
+        )
+        let moved = try #require(CullFolderNavigation.reviewSummaries(in: root).first)
+
+        #expect(original.inventorySignature != moved.inventorySignature)
+        #expect(moved.isReviewed)
     }
 
     @Test func keepsReviewedFoldersInTheSnapshotButOutOfTheActiveQueue() throws {
