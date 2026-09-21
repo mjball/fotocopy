@@ -16,6 +16,21 @@ struct CullFolderReviewSummary: Identifiable, Sendable, Equatable {
     var unreviewedCount: Int
     var keptCount: Int
     var rejectedCount: Int
+    var inventorySignature: String
+
+    init(
+        folderURL: URL,
+        unreviewedCount: Int,
+        keptCount: Int,
+        rejectedCount: Int,
+        inventorySignature: String = ""
+    ) {
+        self.folderURL = folderURL
+        self.unreviewedCount = unreviewedCount
+        self.keptCount = keptCount
+        self.rejectedCount = rejectedCount
+        self.inventorySignature = inventorySignature
+    }
 
     var id: URL { folderURL }
     var totalCount: Int { unreviewedCount + keptCount + rejectedCount }
@@ -214,21 +229,30 @@ enum CullFolderNavigation {
                     month: monthURL.lastPathComponent
                 ) {
                     try cancellationCheck()
-                    let unreviewedCount = directCR3Count(in: dayURL, fileManager: fileManager)
-                    let keptCount = directCR3Count(
+                    let unreviewed = directCR3Inventory(
+                        in: dayURL,
+                        bucket: "unreviewed",
+                        fileManager: fileManager
+                    )
+                    let kept = directCR3Inventory(
                         in: dayURL.appendingPathComponent(CullDisposition.select.destinationFolderName, isDirectory: true),
+                        bucket: "kept",
                         fileManager: fileManager
                     )
-                    let rejectedCount = directCR3Count(
+                    let rejected = directCR3Inventory(
                         in: dayURL.appendingPathComponent(CullDisposition.reject.destinationFolderName, isDirectory: true),
+                        bucket: "rejected",
                         fileManager: fileManager
                     )
-                    guard unreviewedCount + keptCount + rejectedCount > 0 else { continue }
+                    guard unreviewed.count + kept.count + rejected.count > 0 else { continue }
                     folders.append(CullFolderReviewSummary(
                         folderURL: dayURL.standardizedFileURL,
-                        unreviewedCount: unreviewedCount,
-                        keptCount: keptCount,
-                        rejectedCount: rejectedCount
+                        unreviewedCount: unreviewed.count,
+                        keptCount: kept.count,
+                        rejectedCount: rejected.count,
+                        inventorySignature: stableInventorySignature(
+                            unreviewed.signatureParts + kept.signatureParts + rejected.signatureParts
+                        )
                     ))
                 }
             }
@@ -239,23 +263,59 @@ enum CullFolderNavigation {
         }
     }
 
-    private static func directCR3Count(in directory: URL, fileManager: FileManager) -> Int {
+    private struct DirectCR3Inventory {
+        let count: Int
+        let signatureParts: [String]
+    }
+
+    private static func directCR3Inventory(
+        in directory: URL,
+        bucket: String,
+        fileManager: FileManager
+    ) -> DirectCR3Inventory {
         guard isSafeDirectory(directory, fileManager: fileManager),
               let children = try? fileManager.contentsOfDirectory(
                   at: directory,
-                  includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                  includingPropertiesForKeys: [
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                    .fileSizeKey,
+                    .contentModificationDateKey
+                  ],
                   options: [.skipsHiddenFiles]
               ) else {
-            return 0
+            return DirectCR3Inventory(count: 0, signatureParts: [])
         }
 
-        return children.count { url in
+        let signatureParts = children.compactMap { url -> String? in
             guard url.pathExtension.caseInsensitiveCompare("cr3") == .orderedSame,
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
-                return false
+                  let values = try? url.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                    .fileSizeKey,
+                    .contentModificationDateKey
+                  ]),
+                  values.isRegularFile == true,
+                  values.isSymbolicLink != true else {
+                return nil
             }
-            return values.isRegularFile == true && values.isSymbolicLink != true
+            let size = values.fileSize ?? -1
+            let modified = values.contentModificationDate?.timeIntervalSinceReferenceDate.bitPattern ?? 0
+            return "\(bucket)|\(url.lastPathComponent)|\(size)|\(modified)"
         }
+        .sorted()
+        return DirectCR3Inventory(count: signatureParts.count, signatureParts: signatureParts)
+    }
+
+    /// A stable non-cryptographic digest is sufficient here: a collision can
+    /// only make the disposable ranking cache stale, never authorize a move.
+    private static func stableInventorySignature(_ parts: [String]) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in parts.joined(separator: "\n").utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
     }
 
     private static func childDirectories(of directory: URL, fileManager: FileManager) -> [URL] {

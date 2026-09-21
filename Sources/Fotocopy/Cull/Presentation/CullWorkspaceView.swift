@@ -351,7 +351,8 @@ struct CullSidebarSections: View {
                     folderQueueRow(
                         recommendation.summary,
                         isReviewed: false,
-                        recommendationReason: recommendation.reason
+                        recommendationReason: recommendation.reason,
+                        reviewMetrics: recommendation.metrics
                     )
                 }
 
@@ -424,7 +425,8 @@ struct CullSidebarSections: View {
     private func folderQueueRow(
         _ summary: CullFolderReviewSummary,
         isReviewed: Bool,
-        recommendationReason: CullFolderRecommendationReason? = nil
+        recommendationReason: CullFolderRecommendationReason? = nil,
+        reviewMetrics: CullFolderReviewMetrics? = nil
     ) -> some View {
         let isCurrent = summary.folderURL == model.folderURL?.standardizedFileURL
         return Button {
@@ -442,7 +444,8 @@ struct CullSidebarSections: View {
                     Text(folderQueueDetail(
                         summary,
                         isReviewed: isReviewed,
-                        recommendationReason: recommendationReason
+                        recommendationReason: recommendationReason,
+                        reviewMetrics: reviewMetrics
                     ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -471,7 +474,8 @@ struct CullSidebarSections: View {
     private func folderQueueDetail(
         _ summary: CullFolderReviewSummary,
         isReviewed: Bool,
-        recommendationReason: CullFolderRecommendationReason? = nil
+        recommendationReason: CullFolderRecommendationReason? = nil,
+        reviewMetrics: CullFolderReviewMetrics? = nil
     ) -> String {
         if isReviewed {
             return "\(summary.totalCount) reviewed"
@@ -480,6 +484,12 @@ struct CullSidebarSections: View {
             switch recommendationReason {
             case .current:
                 return "Current · \(summary.unreviewedCount) unreviewed"
+            case .highPayoff:
+                let groupCount = reviewMetrics?.reviewGroupCount ?? 0
+                return "High payoff · \(summary.unreviewedCount) in \(groupCount) \(groupCount == 1 ? "group" : "groups")"
+            case .quickWin:
+                let groupCount = reviewMetrics?.reviewGroupCount ?? 0
+                return "Quick win · \(groupCount) \(groupCount == 1 ? "group" : "groups") remaining"
             case .largeOpportunity:
                 return "Large opportunity · \(summary.unreviewedCount) unreviewed"
             case .closeToDone:
@@ -2509,6 +2519,7 @@ final class CullViewModel {
     private(set) var nextCullFolderURL: URL?
     private(set) var cullFolderReviewSnapshot: CullFolderReviewSnapshot?
     private(set) var cullFolderRecommendationSet = CullFolderRecommendationSet.empty
+    private(set) var cullFolderReviewMetrics: [URL: CullFolderReviewMetrics] = [:]
     private(set) var isRefreshingCullFolderQueue = false
     private(set) var cullFolderQueueError: String?
     var selectedFrameURL: URL?
@@ -2530,18 +2541,24 @@ final class CullViewModel {
     private var selectsLastFrameAfterScan = false
     private var cullFolderQueueTask: Task<Void, Never>?
     private var cullFolderQueueGeneration = 0
+    private var cullFolderMetricsTask: Task<Void, Never>?
+    private var cullFolderMetricsGeneration = 0
+    private var pendingCullFolderReviewMetrics: [URL: CullFolderReviewMetrics] = [:]
     private var cullRefreshNoticeTask: Task<Void, Never>?
     private var lastUndoOperation: CullUndoOperation?
     private let quickExportNotifier: any QuickExportNotifying
     private let preferences: UserDefaults
+    private let cullFolderMetricsCache: CullFolderReviewMetricsCache
     private var cullFolderLastOpenedAt: [String: TimeInterval]
 
     init(
         quickExportNotifier: any QuickExportNotifying = SystemQuickExportNotifier(),
-        preferences: UserDefaults = .standard
+        preferences: UserDefaults = .standard,
+        cullFolderMetricsCache: CullFolderReviewMetricsCache = CullFolderReviewMetricsCache()
     ) {
         self.quickExportNotifier = quickExportNotifier
         self.preferences = preferences
+        self.cullFolderMetricsCache = cullFolderMetricsCache
         self.cullFolderLastOpenedAt = (preferences.dictionary(
             forKey: PreferenceKeys.cullFolderLastOpenedAt
         ) ?? [:]).compactMapValues { value in
@@ -2579,7 +2596,11 @@ final class CullViewModel {
         let summariesByURL = Dictionary(uniqueKeysWithValues: snapshot.folders.map { ($0.folderURL, $0) })
         return cullFolderRecommendationSet.recommended.compactMap { recommendation in
             summariesByURL[recommendation.folderURL].map {
-                CullFolderRecommendationRow(summary: $0, reason: recommendation.reason)
+                CullFolderRecommendationRow(
+                    summary: $0,
+                    reason: recommendation.reason,
+                    metrics: cullFolderReviewMetrics[recommendation.folderURL]
+                )
             }
         }
     }
@@ -2773,6 +2794,7 @@ final class CullViewModel {
         folderURL = folder
         recordCullFolderActivity(folder)
         preferences.set(folder.path, forKey: PreferenceKeys.lastCullFolder)
+        publishPendingCullFolderReviewMetrics()
         rebuildCullFolderRecommendations()
         startScan(
             preferring: reviewGroupID,
@@ -2809,6 +2831,8 @@ final class CullViewModel {
         refreshFolderQueueAfterScan: Bool = false
     ) {
         guard let folderURL, !isScanning, !isMoving else { return }
+        publishPendingCullFolderReviewMetrics()
+        rebuildCullFolderRecommendations()
         preferredReviewGroupIDAfterScan = preferredReviewGroupID
         preferredFrameURLAfterScan = preferringFrameURL
         selectsLastReviewGroupAfterScan = selectingLastReviewGroup
@@ -2967,6 +2991,7 @@ final class CullViewModel {
         }
         if cullFolderReviewSnapshot?.libraryRootURL == root {
             updateCullFolderNeighbors()
+            startCullFolderMetricsAnalysisIfNeeded()
             return
         }
         refreshCullFolderQueue()
@@ -2980,8 +3005,12 @@ final class CullViewModel {
         }
 
         cancelCullFolderQueueRefresh()
+        cancelCullFolderMetricsAnalysis()
         if cullFolderReviewSnapshot?.libraryRootURL != root {
             cullFolderReviewSnapshot = nil
+            cullFolderRecommendationSet = .empty
+            cullFolderReviewMetrics = [:]
+            pendingCullFolderReviewMetrics = [:]
             previousCullFolderURL = nil
             nextCullFolderURL = nil
         }
@@ -3012,9 +3041,11 @@ final class CullViewModel {
                     libraryRootURL: root,
                     folders: summaries
                 )
+                model.discardInvalidCullFolderReviewMetrics()
                 model.cullFolderQueueError = nil
                 model.rebuildCullFolderRecommendations()
                 model.updateCullFolderNeighbors()
+                model.startCullFolderMetricsAnalysisIfNeeded()
             } catch is CancellationError {
                 // Foreground photo work or a newer refresh took priority.
             } catch {
@@ -3038,12 +3069,15 @@ final class CullViewModel {
 
     private func prepareCullFolderQueueForActiveScan(in folderURL: URL) {
         cancelCullFolderQueueRefresh()
+        cancelCullFolderMetricsAnalysis()
         let root = CullFolderNavigation.libraryRoot(containing: folderURL)?.standardizedFileURL
             ?? library.configuredLibraryURL?.standardizedFileURL
         if cullFolderReviewSnapshot?.libraryRootURL != root {
             cullFolderReviewSnapshot = nil
             cullFolderQueueError = nil
             cullFolderRecommendationSet = .empty
+            cullFolderReviewMetrics = [:]
+            pendingCullFolderReviewMetrics = [:]
         }
         updateCullFolderNeighbors()
     }
@@ -3057,8 +3091,11 @@ final class CullViewModel {
 
     private func clearCullFolderQueue() {
         cancelCullFolderQueueRefresh()
+        cancelCullFolderMetricsAnalysis()
         cullFolderReviewSnapshot = nil
         cullFolderRecommendationSet = .empty
+        cullFolderReviewMetrics = [:]
+        pendingCullFolderReviewMetrics = [:]
         cullFolderQueueError = nil
         previousCullFolderURL = nil
         nextCullFolderURL = nil
@@ -3082,13 +3119,33 @@ final class CullViewModel {
     private func updateCullFolderReviewSummary(from scan: CullFolderScan) {
         guard var snapshot = cullFolderReviewSnapshot else { return }
         let frames = scan.bursts.flatMap(\.frames) + scan.singleFrames
+        let normalizedFolderURL = scan.folder.standardizedFileURL
+        let inventorySignature = snapshot.folders.first {
+            $0.folderURL == normalizedFolderURL
+        }?.inventorySignature ?? ""
         snapshot.replace(CullFolderReviewSummary(
-            folderURL: scan.folder.standardizedFileURL,
+            folderURL: normalizedFolderURL,
             unreviewedCount: frames.count { $0.disposition == nil },
             keptCount: frames.count { $0.disposition == .select },
-            rejectedCount: frames.count { $0.disposition == .reject }
+            rejectedCount: frames.count { $0.disposition == .reject },
+            inventorySignature: inventorySignature
         ))
         cullFolderReviewSnapshot = snapshot
+        let metrics = CullFolderReviewMetrics(
+            scan: scan,
+            inventorySignature: inventorySignature
+        )
+        cullFolderReviewMetrics[normalizedFolderURL] = metrics
+        pendingCullFolderReviewMetrics.removeValue(forKey: normalizedFolderURL)
+        if let root = cullFolderReviewSnapshot?.libraryRootURL, !inventorySignature.isEmpty {
+            Task {
+                await cullFolderMetricsCache.store(
+                    metrics,
+                    libraryRootURL: root,
+                    folderURL: normalizedFolderURL
+                )
+            }
+        }
         rebuildCullFolderRecommendations()
         updateCullFolderNeighbors()
     }
@@ -3116,8 +3173,121 @@ final class CullViewModel {
         cullFolderRecommendationSet = CullFolderRecommendationEngine.recommendations(
             from: cullFolderReviewSnapshot?.folders ?? [],
             currentFolderURL: folderURL,
-            lastOpenedAt: cullFolderLastOpenedAt
+            lastOpenedAt: cullFolderLastOpenedAt,
+            metricsByFolderURL: cullFolderReviewMetrics
         )
+    }
+
+    private func publishPendingCullFolderReviewMetrics() {
+        guard !pendingCullFolderReviewMetrics.isEmpty else { return }
+        cullFolderReviewMetrics.merge(pendingCullFolderReviewMetrics) { _, pending in pending }
+        pendingCullFolderReviewMetrics = [:]
+    }
+
+    private func discardInvalidCullFolderReviewMetrics() {
+        guard let snapshot = cullFolderReviewSnapshot else {
+            cullFolderReviewMetrics = [:]
+            pendingCullFolderReviewMetrics = [:]
+            return
+        }
+        let signatureByFolder = Dictionary(
+            uniqueKeysWithValues: snapshot.folders.map { ($0.folderURL, $0.inventorySignature) }
+        )
+        cullFolderReviewMetrics = cullFolderReviewMetrics.filter {
+            signatureByFolder[$0.key] == $0.value.inventorySignature
+        }
+        pendingCullFolderReviewMetrics = pendingCullFolderReviewMetrics.filter {
+            signatureByFolder[$0.key] == $0.value.inventorySignature
+        }
+    }
+
+    private func startCullFolderMetricsAnalysisIfNeeded() {
+        guard cullFolderMetricsTask == nil,
+              !isScanning,
+              !isMoving,
+              let snapshot = cullFolderReviewSnapshot else {
+            return
+        }
+
+        cullFolderMetricsGeneration += 1
+        let generation = cullFolderMetricsGeneration
+        let root = snapshot.libraryRootURL
+        let summaries = snapshot.foldersNeedingReview
+        let cache = cullFolderMetricsCache
+        let model = self
+
+        cullFolderMetricsTask = Task {
+            let cached = await cache.validMetrics(for: summaries, libraryRootURL: root)
+            try? Task.checkCancellation()
+            guard generation == model.cullFolderMetricsGeneration else { return }
+
+            for (folderURL, metrics) in cached where model.cullFolderReviewMetrics[folderURL] == nil {
+                model.cullFolderReviewMetrics[folderURL] = metrics
+            }
+            model.rebuildCullFolderRecommendations()
+
+            let knownURLs = Set(model.cullFolderReviewMetrics.keys)
+                .union(model.pendingCullFolderReviewMetrics.keys)
+            let summaryByURL = Dictionary(uniqueKeysWithValues: summaries.map { ($0.folderURL, $0) })
+            let orderedURLs = model.cullFolderRecommendationSet.recommended.map(\.folderURL)
+                + model.cullFolderRecommendationSet.remainingFolderURLs
+
+            for folderURL in orderedURLs where !knownURLs.contains(folderURL) {
+                guard let summary = summaryByURL[folderURL] else { continue }
+                do {
+                    let worker = Task.detached(priority: .utility) {
+                        try await BurstGroupingEngine.scan(
+                            folder: folderURL,
+                            workerCount: 1
+                        ) { _ in }
+                    }
+                    let scan = try await withTaskCancellationHandler {
+                        try await worker.value
+                    } onCancel: {
+                        worker.cancel()
+                    }
+                    try Task.checkCancellation()
+                    let metrics = CullFolderReviewMetrics(
+                        scan: scan,
+                        inventorySignature: summary.inventorySignature
+                    )
+                    await cache.store(
+                        metrics,
+                        libraryRootURL: root,
+                        folderURL: folderURL
+                    )
+                    guard generation == model.cullFolderMetricsGeneration else { return }
+                    model.pendingCullFolderReviewMetrics[folderURL] = metrics
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // An unreadable folder keeps its count-only recommendation.
+                }
+            }
+
+            guard generation == model.cullFolderMetricsGeneration else { return }
+            model.cullFolderMetricsTask = nil
+        }
+    }
+
+    private func cancelCullFolderMetricsAnalysis() {
+        cullFolderMetricsGeneration += 1
+        cullFolderMetricsTask?.cancel()
+        cullFolderMetricsTask = nil
+    }
+
+    private func refreshActiveCullFolderMetrics() {
+        guard let scan = scanResult,
+              let summary = cullFolderReviewSnapshot?.folders.first(where: {
+                  $0.folderURL == scan.folder.standardizedFileURL
+              }) else {
+            return
+        }
+        cullFolderReviewMetrics[summary.folderURL] = CullFolderReviewMetrics(
+            scan: scan,
+            inventorySignature: summary.inventorySignature
+        )
+        pendingCullFolderReviewMetrics.removeValue(forKey: summary.folderURL)
     }
 
     private func recordCullFolderActivity(_ folderURL: URL) {
@@ -3601,6 +3771,7 @@ final class CullViewModel {
                 guard !Task.isCancelled, let self else { return }
                 self.rewriteFrameURLs(using: result.rawRelocations)
                 self.applyDispositionStates(changedStates, after: result.rawRelocations)
+                self.refreshActiveCullFolderMetrics()
                 self.library.applyImageStatistics(after: result, in: folderURL)
                 self.updateCullFolderQueue(after: result.rawRelocations, in: folderURL)
                 if let nextFrameURL {
