@@ -335,7 +335,7 @@ struct ImportViewModelTests {
         #expect(counts.new == 1)
     }
 
-    @Test func startImportSeedsTransferBytesFromNonDuplicatesOnly() async throws {
+    @Test func startImportSeedsTransferWorkFromNonDuplicatesOnly() async throws {
         let source = try makeTempDir()
         let destination = try makeTempDir()
         defer { cleanup(source); cleanup(destination) }
@@ -376,7 +376,10 @@ struct ImportViewModelTests {
             await Task.yield()
         }
 
-        #expect(vm.progress.totalFiles == 2)
+        #expect(vm.progress.totalFiles == 1)
+        #expect(vm.progress.processedFiles == 1)
+        #expect(vm.progress.successfulFiles == 1)
+        #expect(vm.progress.fraction == 1)
         #expect(vm.progress.totalTransferBytes == 256)
         #expect(vm.progress.duplicatesSkipped == 1)
     }

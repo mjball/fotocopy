@@ -94,33 +94,51 @@ struct ImportProgressTests {
         progress.recordSuccessfulTransfer(bytes: 200)
 
         #expect(progress.processedFiles == 2)
+        #expect(progress.successfulFiles == 2)
         #expect(progress.transferredBytes == 300)
         #expect(progress.settledTransferBytes == 300)
         #expect(progress.remainingTransferBytes == 0)
     }
 
-    @Test func duplicateSkipDoesNotAffectTransferBytes() {
+    @Test func duplicateSkipDoesNotAdvanceTransferProgress() {
         let progress = ImportProgress()
-        progress.beginImport(totalFiles: 3, totalTransferBytes: 500)
+        progress.beginImport(totalFiles: 2, totalTransferBytes: 500)
         progress.recordDuplicateSkipped()
 
-        #expect(progress.processedFiles == 1)
+        #expect(progress.processedFiles == 0)
         #expect(progress.duplicatesSkipped == 1)
+        #expect(progress.fraction == 0)
         #expect(progress.transferredBytes == 0)
         #expect(progress.settledTransferBytes == 0)
         #expect(progress.remainingTransferBytes == 500)
     }
 
-    @Test func batchDuplicateSkipSettlesAllKnownDuplicatesAtOnce() {
+    @Test func batchDuplicateSkipOnlyUpdatesDuplicateCount() {
         let progress = ImportProgress()
-        progress.beginImport(totalFiles: 10_000, totalTransferBytes: 500)
+        progress.beginImport(totalFiles: 1, totalTransferBytes: 500)
         progress.recordDuplicatesSkipped(count: 9_999)
 
-        #expect(progress.processedFiles == 9_999)
+        #expect(progress.processedFiles == 0)
         #expect(progress.duplicatesSkipped == 9_999)
+        #expect(progress.fraction == 0)
         #expect(progress.transferredBytes == 0)
         #expect(progress.settledTransferBytes == 0)
         #expect(progress.remainingTransferBytes == 500)
+    }
+
+    @Test func fractionTracksOnlyFilesScheduledForTransfer() {
+        let progress = ImportProgress()
+        progress.beginImport(totalFiles: 336, totalTransferBytes: 0)
+        progress.recordDuplicatesSkipped(count: 4_315)
+
+        for _ in 0 ..< 179 {
+            progress.recordSuccessfulTransfer(bytes: 0)
+        }
+
+        #expect(progress.totalFiles == 336)
+        #expect(progress.processedFiles == 179)
+        #expect(progress.duplicatesSkipped == 4_315)
+        #expect(progress.fraction == Double(179) / Double(336))
     }
 
     @Test func failedTransferSettlesBytesWithoutThroughput() {
@@ -130,6 +148,7 @@ struct ImportProgressTests {
 
         #expect(progress.processedFiles == 1)
         #expect(progress.failedFiles == 1)
+        #expect(progress.successfulFiles == 0)
         #expect(progress.transferredBytes == 0)
         #expect(progress.settledTransferBytes == 1_024)
         #expect(progress.throughputBytesPerSecond == nil)

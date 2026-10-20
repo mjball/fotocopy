@@ -750,7 +750,7 @@ struct ImportEngineTests {
 
         let plan = preview.executionPlan(by: ImportFilter(excludedExtensions: ["mov"]))
 
-        #expect(plan.totalFiles == 2)
+        #expect(plan.transferFileCount == 1)
         #expect(plan.duplicateCount == 1)
         #expect(plan.totalTransferBytes == 200)
         #expect(plan.filesToTransfer.map(\.filename) == ["new.cr3"])
