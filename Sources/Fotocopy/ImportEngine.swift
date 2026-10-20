@@ -123,11 +123,9 @@ struct PreviewResult: Sendable {
     func executionPlan(by filter: ImportFilter) -> ImportExecutionPlan {
         var filesToTransfer: [PreviewFile] = []
         var duplicateCount = 0
-        var totalCount = 0
         var totalTransferBytes = 0
 
         for file in files where filter.includes(file) {
-            totalCount += 1
             if file.isDuplicate {
                 duplicateCount += 1
             } else {
@@ -138,7 +136,7 @@ struct PreviewResult: Sendable {
 
         return ImportExecutionPlan(
             filesToTransfer: filesToTransfer,
-            totalFiles: totalCount,
+            transferFileCount: filesToTransfer.count,
             duplicateCount: duplicateCount,
             totalTransferBytes: totalTransferBytes
         )
@@ -147,7 +145,7 @@ struct PreviewResult: Sendable {
 
 struct ImportExecutionPlan: Sendable {
     let filesToTransfer: [PreviewFile]
-    let totalFiles: Int
+    let transferFileCount: Int
     let duplicateCount: Int
     let totalTransferBytes: Int
 }

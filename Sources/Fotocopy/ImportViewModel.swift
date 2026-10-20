@@ -412,7 +412,7 @@ final class ImportViewModel {
                 }
 
                 progress.beginImport(
-                    totalFiles: executionPlan.totalFiles,
+                    totalFiles: executionPlan.transferFileCount,
                     totalTransferBytes: executionPlan.totalTransferBytes
                 )
                 progress.recordDuplicatesSkipped(count: executionPlan.duplicateCount)

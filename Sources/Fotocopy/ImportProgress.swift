@@ -40,6 +40,10 @@ final class ImportProgress {
         return Double(processedFiles) / Double(totalFiles)
     }
 
+    var successfulFiles: Int {
+        max(0, processedFiles - failedFiles)
+    }
+
     var remainingTransferBytes: Int {
         max(0, totalTransferBytes - settledTransferBytes)
     }
@@ -106,7 +110,6 @@ final class ImportProgress {
     func recordDuplicatesSkipped(count: Int) {
         let count = max(0, count)
         duplicatesSkipped += count
-        processedFiles += count
     }
 
     func recordSuccessfulTransfer(bytes: Int, destinationFolderPath: String? = nil) {

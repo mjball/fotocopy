@@ -526,15 +526,13 @@ struct ContentView: View {
     // MARK: - Complete section
 
     private var completeSection: some View {
-        let imported = vm.progress.processedFiles - vm.progress.duplicatesSkipped - vm.progress.errors.count
-
         return VStack(alignment: .leading, spacing: 12) {
             Label("Import Complete", systemImage: "checkmark.circle.fill")
                 .font(.headline)
                 .foregroundStyle(.green)
 
             HStack(spacing: 16) {
-                Text("\(imported) files imported")
+                Text("\(vm.progress.successfulFiles) files imported")
                 if vm.progress.duplicatesSkipped > 0 {
                     Text("\(vm.progress.duplicatesSkipped) duplicates skipped")
                         .foregroundStyle(.secondary)
